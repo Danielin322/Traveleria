@@ -37,7 +37,7 @@ export default function TripDetailsScreen() {
     try {
       // Note: We use trip_id '1' as a placeholder for now
       const response = await fetch(
-        `http://192.168.0.220:8000/trips/1/itinerary`,
+        `https://lauretta-autotrophic-unconscientiously.ngrok-free.dev`,
       );
       const data = await response.json();
       setItinerary(data);
@@ -63,11 +63,14 @@ export default function TripDetailsScreen() {
     setInputText("");
 
     try {
-      const response = await fetch("http://192.168.0.220:8000/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: currentInput, trip_id: "1" }),
-      });
+      const response = await fetch(
+        "https://lauretta-autotrophic-unconscientiously.ngrok-free.dev",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: currentInput, trip_id: "1" }),
+        },
+      );
 
       const data = await response.json();
       const aiResponse = {

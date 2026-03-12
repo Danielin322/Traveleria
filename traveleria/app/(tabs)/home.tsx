@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 import {
-    ActivityIndicator,
-    FlatList,
-    Modal,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  FlatList,
+  Modal,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 // 1. MUST import useRouter to use navigation
 import { useRouter } from "expo-router";
@@ -26,7 +26,9 @@ export default function HomeScreen() {
 
   const fetchTrips = async () => {
     try {
-      const response = await fetch("http://192.168.0.220:8000/trips");
+      const response = await fetch(
+        "https://lauretta-autotrophic-unconscientiously.ngrok-free.dev",
+      );
       const data = await response.json();
       setTrips(data);
     } catch (error) {
@@ -47,11 +49,14 @@ export default function HomeScreen() {
     };
 
     try {
-      const response = await fetch("http://192.168.0.220:8000/trips", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(tripData),
-      });
+      const response = await fetch(
+        "https://lauretta-autotrophic-unconscientiously.ngrok-free.dev/trips",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(tripData),
+        },
+      );
 
       if (response.ok) {
         fetchTrips();

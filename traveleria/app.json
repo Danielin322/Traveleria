@@ -3,6 +3,7 @@
     "name": "traveleria",
     "slug": "traveleria",
     "version": "1.0.0",
+    "privacy": "public",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "traveleria",
@@ -43,6 +44,19 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "be25772c-0783-459f-a7ec-cfdc026945da"
+      }
+    },
+    "owner": "shirelbar80",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/be25772c-0783-459f-a7ec-cfdc026945da"
     }
   }
 }
