@@ -55,6 +55,11 @@ itineraries_db = {
 
 # --- Endpoints ---
 
+@app.get("/")
+def read_root():
+    print("LOG: Someone checked the server status!")
+    return {"status": "Traveleria Server is Online!"}
+
 # 1. Trips Management
 @app.get("/trips")
 def get_trips():

@@ -2,12 +2,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
-    Image,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  Image,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 
 export default function ProfileScreen() {
@@ -17,7 +17,6 @@ export default function ProfileScreen() {
   const [userData, setUserData] = useState({
     fullName: "Your Name",
     country: "Israel",
-    location: "Florence, Italy",
     language: "Hebrew, English",
     age: "23",
     tripsCount: 4,
@@ -84,7 +83,6 @@ export default function ProfileScreen() {
         </View>
 
         <Text style={styles.nameText}>{userData.fullName}</Text>
-        <Text style={styles.locationText}>{userData.location}</Text>
       </View>
 
       <View style={styles.statsContainer}>
