@@ -19,6 +19,16 @@ export default function TabLayout() {
         }}
       />
 
+      <Tabs.Screen
+        name="wallet"
+        options={{
+          title: "Wallet",
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="card-outline" size={28} color={color} />
+          ),
+        }}
+      />
+
       {/* הוספת לשונית הפרופיל */}
       <Tabs.Screen
         name="profile"
