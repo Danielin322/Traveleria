@@ -1,4 +1,16 @@
+// Polyfill for random values used by Cognito
+import "react-native-get-random-values";
+// Polyfill for Buffer used in encryption calculations
+import { Buffer } from "buffer";
+global.Buffer = Buffer;
+
 import { Stack } from "expo-router";
+import "react-native-get-random-values";
+// --- AWS Amplify Initialization ---
+import { Amplify } from "aws-amplify";
+import awsConfig from "../config/awsConfig";
+
+Amplify.configure(awsConfig);
 
 export default function RootLayout() {
   return (

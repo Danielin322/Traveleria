@@ -1,13 +1,17 @@
 import { useState } from "react";
 import {
+  Alert,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
+
 // 1. Import the router tool from Expo
 import { useRouter } from "expo-router";
+
+import { signInUser } from "../services/authService";
 
 export default function LoginScreen() {
   const [email, setEmail] = useState("");
@@ -16,10 +20,44 @@ export default function LoginScreen() {
   // 2. Initialize the router
   const router = useRouter();
 
-  const handleLogin = () => {
-    console.log("Login button pressed!");
-    // Navigate to the (tabs) group and the home screen inside it
-    router.replace("/(tabs)/home");
+  // const handleLogin = () => {
+  //   console.log("Login button pressed!");
+  //   // Navigate to the (tabs) group and the home screen inside it
+  //   router.replace("/(tabs)/home");
+  // };
+  const handleLogin = async () => {
+    // 1. Basic validation
+    if (!email || !password) {
+      Alert.alert("Error", "Please enter both email and password.");
+      return;
+    }
+
+    // 2. Calling the AWS sign-in service
+    const result = await signInUser(email, password);
+
+    if (result.success) {
+      console.log("Login successful!");
+      // 3. Only if successful, navigate to the home screen
+      router.replace("/(tabs)/home");
+    } else {
+      // 4. Handling errors (like wrong password or unconfirmed user)
+      const error = result.error as any;
+      let errorMessage = "Could not log in. Please check your credentials.";
+
+      if (error.name === "UserNotConfirmedException") {
+        errorMessage =
+          "Your account is not confirmed yet. Please verify your email first.";
+      } else if (error.name === "NotAuthorizedException") {
+        errorMessage = "Incorrect email or password.";
+      }
+
+      Alert.alert("Login Failed", errorMessage);
+    }
+  };
+
+  // Function to navigate to the sign up screen
+  const handleGoToSignup = () => {
+    router.push("/signup");
   };
 
   return (
@@ -50,7 +88,7 @@ export default function LoginScreen() {
         <Text style={styles.googleButtonText}>Sign in with Google</Text>
       </TouchableOpacity>
 
-      <TouchableOpacity style={styles.signupButton}>
+      <TouchableOpacity style={styles.signupButton} onPress={handleGoToSignup}>
         <Text style={styles.signupButtonText}>Create a new account</Text>
       </TouchableOpacity>
     </View>
