@@ -94,10 +94,13 @@ export const signInUser = async (email: string, pass: string) => {
 
 export const signOutUser = async () => {
   try {
-    await signOut();
+    // Sign out from all devices by setting global to true
+    await signOut({ global: true });
     return { success: true };
   } catch (error) {
-    console.error("Error signing out:", error);
-    return { success: false, error };
+    // Cast error to any to access properties safely in TS
+    const err = error as any;
+    console.error("Error signing out:", err);
+    return { success: false, error: err };
   }
 };

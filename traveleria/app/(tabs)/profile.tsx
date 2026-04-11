@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
+  Alert,
   Image,
   ScrollView,
   StyleSheet,
@@ -9,6 +10,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { signOutUser } from "../../services/authService";
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -60,6 +62,15 @@ export default function ProfileScreen() {
         interests: userData.interests.join(", "),
       },
     });
+  };
+
+  const handleLogout = async () => {
+    const result = await signOutUser();
+    if (result.success) {
+      router.replace("/");
+    } else {
+      Alert.alert("Logout Failed", "Please try again.");
+    }
   };
 
   return (
@@ -130,10 +141,7 @@ export default function ProfileScreen() {
         </View>
       </View>
 
-      <TouchableOpacity
-        style={styles.logoutButton}
-        onPress={() => router.replace("/")}
-      >
+      <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
         <Ionicons name="log-out-outline" size={20} color="#ff4d4d" />
         <Text style={styles.logoutText}>Log Out</Text>
       </TouchableOpacity>
