@@ -1,5 +1,5 @@
 // Import the authentication functions from AWS Amplify
-import { confirmSignUp, signIn, signUp } from "aws-amplify/auth";
+import { confirmSignUp, signIn, signOut, signUp } from "aws-amplify/auth";
 
 // Interface defining the expected parameters for user registration
 interface SignUpParams {
@@ -65,15 +65,14 @@ export const signInUser = async (email: string, pass: string) => {
     const { isSignedIn, nextStep } = await signIn({
       username: email,
       password: pass,
+      options: {
+        authFlowType: "USER_PASSWORD_AUTH",
+      },
     });
 
     // Returning the result to the UI
     return { success: true, isSignedIn, nextStep };
   } catch (error) {
-    // Logging the error for debugging purposes
-    console.error("Error signing in:", error);
-    //////////////////////////////////////delete//
-    // Replace console.error('Error signing in:', error); with this:
     const err = error as any;
 
     console.log("--- FULL AUTH ERROR START ---");
@@ -89,7 +88,16 @@ export const signInUser = async (email: string, pass: string) => {
       );
     }
     console.log("--- FULL AUTH ERROR END ---");
-    /////////////////////////////////
+    return { success: false, error };
+  }
+};
+
+export const signOutUser = async () => {
+  try {
+    await signOut();
+    return { success: true };
+  } catch (error) {
+    console.error("Error signing out:", error);
     return { success: false, error };
   }
 };

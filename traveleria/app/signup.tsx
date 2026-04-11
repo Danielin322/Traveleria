@@ -346,22 +346,6 @@ export default function SignupScreen() {
     }
   };
 
-  //   if (isRegistered) {
-  //     return (
-  //       <View style={styles.container}>
-  //         <Text style={styles.title}>Account Created! 🎉</Text>
-  //         <Text style={styles.message}>
-  //           A verification code has been sent to {email}. Please check your inbox
-  //           to confirm your account before logging in.
-  //         </Text>
-
-  //         <TouchableOpacity style={styles.button} onPress={() => router.back()}>
-  //           <Text style={styles.buttonText}>Back to Login</Text>
-  //         </TouchableOpacity>
-  //       </View>
-  //     );
-  //   }
-
   if (isRegistered) {
     return (
       <View style={styles.container}>
