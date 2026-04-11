@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Alert,
   StyleSheet,
@@ -9,9 +9,9 @@ import {
 } from "react-native";
 
 // Import the router tool from Expo
+import { fetchAuthSession, getCurrentUser } from "aws-amplify/auth";
 import { useRouter } from "expo-router";
-
-import { signInUser, signOutUser } from "../services/authService";
+import { signInUser } from "../services/authService";
 
 export default function LoginScreen() {
   const [email, setEmail] = useState("");
@@ -19,6 +19,29 @@ export default function LoginScreen() {
 
   // Initialize the router
   const router = useRouter();
+
+  useEffect(() => {
+    checkUser();
+  }, []);
+
+  const checkUser = async () => {
+    try {
+      // Fetch the current session to verify active tokens
+      const session = await fetchAuthSession();
+
+      // Check if valid tokens exist in the session
+      if (session.tokens) {
+        const user = await getCurrentUser();
+        if (user) {
+          // If a valid user session exists, skip login and redirect to home
+          router.replace("/(tabs)/home");
+        }
+      }
+    } catch (err) {
+      // If no session is found, stay on the login screen
+      console.log("No active session detected");
+    }
+  };
 
   const handleLogin = async () => {
     // Basic validation
@@ -50,16 +73,6 @@ export default function LoginScreen() {
     }
   };
 
-  const handleLogout = async () => {
-    const result = await signOutUser();
-    if (result.success) {
-      // Going back to login screen
-      router.replace("/");
-    } else {
-      Alert.alert("Logout Failed", "Please try again.");
-    }
-  };
-
   // Function to navigate to the sign up screen
   const handleGoToSignup = () => {
     router.push("/signup");
@@ -67,12 +80,6 @@ export default function LoginScreen() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Welcome Home! 🏠</Text>
-
-      <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-        <Text style={styles.buttonText}>Log Out</Text>
-      </TouchableOpacity>
-
       <Text style={styles.title}>Traveleria</Text>
 
       <TextInput
@@ -146,12 +153,6 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: "center",
     marginBottom: 15,
-  },
-  logoutButton: {
-    backgroundColor: "#ff3b30", // צבע אדום להתנתקות
-    paddingVertical: 12,
-    paddingHorizontal: 30,
-    borderRadius: 8,
   },
   googleButtonText: { color: "#fff", fontSize: 16, fontWeight: "bold" },
   signupButton: { marginTop: 10 },
