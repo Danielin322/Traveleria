@@ -8,39 +8,34 @@ import {
   View,
 } from "react-native";
 
-// 1. Import the router tool from Expo
+// Import the router tool from Expo
 import { useRouter } from "expo-router";
 
-import { signInUser } from "../services/authService";
+import { signInUser, signOutUser } from "../services/authService";
 
 export default function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
-  // 2. Initialize the router
+  // Initialize the router
   const router = useRouter();
 
-  // const handleLogin = () => {
-  //   console.log("Login button pressed!");
-  //   // Navigate to the (tabs) group and the home screen inside it
-  //   router.replace("/(tabs)/home");
-  // };
   const handleLogin = async () => {
-    // 1. Basic validation
+    // Basic validation
     if (!email || !password) {
       Alert.alert("Error", "Please enter both email and password.");
       return;
     }
 
-    // 2. Calling the AWS sign-in service
+    // Calling the AWS sign-in service
     const result = await signInUser(email, password);
 
     if (result.success) {
       console.log("Login successful!");
-      // 3. Only if successful, navigate to the home screen
+      // Only if successful, navigate to the home screen
       router.replace("/(tabs)/home");
     } else {
-      // 4. Handling errors (like wrong password or unconfirmed user)
+      // Handling errors (like wrong password or unconfirmed user)
       const error = result.error as any;
       let errorMessage = "Could not log in. Please check your credentials.";
 
@@ -55,6 +50,16 @@ export default function LoginScreen() {
     }
   };
 
+  const handleLogout = async () => {
+    const result = await signOutUser();
+    if (result.success) {
+      // Going back to login screen
+      router.replace("/");
+    } else {
+      Alert.alert("Logout Failed", "Please try again.");
+    }
+  };
+
   // Function to navigate to the sign up screen
   const handleGoToSignup = () => {
     router.push("/signup");
@@ -62,6 +67,12 @@ export default function LoginScreen() {
 
   return (
     <View style={styles.container}>
+      <Text style={styles.title}>Welcome Home! 🏠</Text>
+
+      <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+        <Text style={styles.buttonText}>Log Out</Text>
+      </TouchableOpacity>
+
       <Text style={styles.title}>Traveleria</Text>
 
       <TextInput
@@ -135,6 +146,12 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: "center",
     marginBottom: 15,
+  },
+  logoutButton: {
+    backgroundColor: "#ff3b30", // צבע אדום להתנתקות
+    paddingVertical: 12,
+    paddingHorizontal: 30,
+    borderRadius: 8,
   },
   googleButtonText: { color: "#fff", fontSize: 16, fontWeight: "bold" },
   signupButton: { marginTop: 10 },
