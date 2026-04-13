@@ -13,6 +13,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { API_URL } from "../constants/api";
 
 export default function TripDetailsScreen() {
   const { title, location, date } = useLocalSearchParams();
@@ -36,9 +37,7 @@ export default function TripDetailsScreen() {
   const fetchItinerary = async () => {
     try {
       // Note: We use trip_id '1' as a placeholder for now
-      const response = await fetch(
-        `https://lauretta-autotrophic-unconscientiously.ngrok-free.dev`,
-      );
+      const response = await fetch(`${API_URL}`);
       const data = await response.json();
       setItinerary(data);
     } catch (error) {
@@ -63,14 +62,11 @@ export default function TripDetailsScreen() {
     setInputText("");
 
     try {
-      const response = await fetch(
-        "https://lauretta-autotrophic-unconscientiously.ngrok-free.dev",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: currentInput, trip_id: "1" }),
-        },
-      );
+      const response = await fetch(`${API_URL}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: currentInput, trip_id: "1" }),
+      });
 
       const data = await response.json();
       const aiResponse = {

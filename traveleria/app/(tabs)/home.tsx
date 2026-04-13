@@ -11,6 +11,7 @@ import {
 } from "react-native";
 // 1. MUST import useRouter to use navigation
 import { useRouter } from "expo-router";
+import { API_URL } from "../../constants/api";
 
 export default function HomeScreen() {
   const [trips, setTrips] = useState([]);
@@ -26,9 +27,7 @@ export default function HomeScreen() {
 
   const fetchTrips = async () => {
     try {
-      const response = await fetch(
-        "https://lauretta-autotrophic-unconscientiously.ngrok-free.dev",
-      );
+      const response = await fetch(`${API_URL}`);
       const data = await response.json();
       setTrips(data);
     } catch (error) {
@@ -49,14 +48,11 @@ export default function HomeScreen() {
     };
 
     try {
-      const response = await fetch(
-        "https://lauretta-autotrophic-unconscientiously.ngrok-free.dev/trips",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(tripData),
-        },
-      );
+      const response = await fetch(`${API_URL}/trips`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(tripData),
+      });
 
       if (response.ok) {
         fetchTrips();
