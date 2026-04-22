@@ -14,6 +14,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { WebView } from "react-native-webview";
+import { getCurrentUser } from "aws-amplify/auth";
 import { API_URL } from "../../constants/api";
 
 const APPLE_COLORS = [
@@ -41,9 +42,15 @@ export default function WalletScreen() {
   const [editDocTitle, setEditDocTitle] = useState("");
   const [editDocColor, setEditDocColor] = useState(APPLE_COLORS[0]);
 
+  const getUserId = async (): Promise<string> => {
+    const { userId } = await getCurrentUser();
+    return userId;
+  };
+
   const fetchDocuments = async () => {
     try {
-      const response = await fetch(`${API_URL}/wallet/documents`);
+      const userId = await getUserId();
+      const response = await fetch(`${API_URL}/wallet/documents?user_id=${userId}`);
       const data = await response.json();
       setDocuments(data);
     } catch (error) {
@@ -71,6 +78,7 @@ export default function WalletScreen() {
     setAddModalVisible(false);
 
     try {
+      const userId = await getUserId();
       const formData = new FormData();
       formData.append("file", {
         uri: asset.uri,
@@ -79,6 +87,7 @@ export default function WalletScreen() {
       } as any);
       formData.append("title", newDocTitle);
       formData.append("color", newDocColor);
+      formData.append("user_id", userId);
 
       const response = await fetch(`${API_URL}/wallet/upload`, {
         method: "POST",
@@ -126,7 +135,8 @@ export default function WalletScreen() {
 
   const handleDelete = async () => {
     try {
-      await fetch(`${API_URL}/wallet/documents/${encodeURIComponent(editingDoc.id)}`, {
+      const userId = await getUserId();
+      await fetch(`${API_URL}/wallet/documents/${encodeURIComponent(editingDoc.id)}?user_id=${userId}`, {
         method: "DELETE",
       });
       setDocuments(documents.filter((doc) => doc.id !== editingDoc.id));
