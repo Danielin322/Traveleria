@@ -16,8 +16,8 @@ import { API_URL } from "../../constants/api";
 export default function HomeScreen() {
   const [trips, setTrips] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // 2. Initialize the router inside the component
   const router = useRouter();
 
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -26,12 +26,19 @@ export default function HomeScreen() {
   const [newDates, setNewDates] = useState("");
 
   const fetchTrips = async () => {
+    if (!API_URL) {
+      setError("API URL is not configured. Please set EXPO_PUBLIC_API_URL in your .env file.");
+      setLoading(false);
+      return;
+    }
     try {
-      const response = await fetch(`${API_URL}`);
+      setError(null);
+      const response = await fetch(`${API_URL}/trips`);
       const data = await response.json();
       setTrips(data);
-    } catch (error) {
-      console.error("Error fetching trips:", error);
+    } catch (err) {
+      setError("Could not connect to server. Make sure the backend is running.");
+      console.error("Error fetching trips:", err);
     } finally {
       setLoading(false);
     }
@@ -61,8 +68,8 @@ export default function HomeScreen() {
         setNewDates("");
         setIsModalVisible(false);
       }
-    } catch (error) {
-      console.error("Error adding trip:", error);
+    } catch (err) {
+      console.error("Error adding trip:", err);
     }
   };
 
@@ -75,8 +82,9 @@ export default function HomeScreen() {
       style={styles.tripCard}
       onPress={() =>
         router.push({
-          pathname: "/trip-details", // Points to app/trip-details.tsx
+          pathname: "/trip-details",
           params: {
+            id: item.id,
             title: item.title,
             location: item.location,
             date: item.date,
@@ -149,6 +157,13 @@ export default function HomeScreen() {
 
       {loading ? (
         <ActivityIndicator size="large" color="#2f6deb" />
+      ) : error ? (
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>{error}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={fetchTrips}>
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
       ) : (
         <FlatList
           data={trips}
@@ -240,4 +255,8 @@ const styles = StyleSheet.create({
   saveButton: { backgroundColor: "#2f6deb" },
   cancelButtonText: { color: "#666", fontWeight: "bold" },
   saveButtonText: { color: "#fff", fontWeight: "bold" },
+  errorContainer: { alignItems: "center", marginTop: 40 },
+  errorText: { color: "#e53935", fontSize: 15, textAlign: "center", marginBottom: 16 },
+  retryButton: { backgroundColor: "#2f6deb", paddingHorizontal: 24, paddingVertical: 10, borderRadius: 10 },
+  retryButtonText: { color: "#fff", fontWeight: "bold" },
 });
