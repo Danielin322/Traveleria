@@ -75,7 +75,15 @@ def add_trip(trip: Trip):
 # 2. Itinerary Management
 @app.get("/trips/{trip_id}/itinerary")
 def get_itinerary(trip_id: str):
-    return itineraries_db.get(trip_id, itineraries_db["default"])
+    return itineraries_db.get(trip_id, [])
+
+
+@app.post("/trips/{trip_id}/itinerary")
+def add_itinerary_item(trip_id: str, item: ItineraryItem):
+    if trip_id not in itineraries_db:
+        itineraries_db[trip_id] = []
+    itineraries_db[trip_id].append(item.dict())
+    return {"message": "Event added successfully", "item": item}
 
 
 # 3. AI Chat Logic
