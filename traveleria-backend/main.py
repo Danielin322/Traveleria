@@ -135,6 +135,7 @@ async def upload_document(
     title: str = Form(...),
     color: str = Form(...),
     user_id: str = Form(...),
+    doc_type: str = Form("Other"),
 ):
     if not S3_BUCKET:
         raise HTTPException(status_code=500, detail="S3 bucket not configured")
@@ -149,13 +150,12 @@ async def upload_document(
             Key=key,
             Body=content,
             ContentType=file.content_type or "application/octet-stream",
-            Metadata={"title": title, "color": color},
+            Metadata={"title": title, "color": color, "doc_type": doc_type},
         )
     except Exception as e:
         print(f"S3 UPLOAD ERROR: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Return a presigned URL valid for 1 hour
     url = s3.generate_presigned_url(
         "get_object",
         Params={"Bucket": S3_BUCKET, "Key": key},
@@ -165,6 +165,7 @@ async def upload_document(
         "id": key,
         "title": title,
         "color": color,
+        "docType": doc_type,
         "url": url,
         "mimeType": file.content_type,
     }
@@ -195,6 +196,7 @@ def list_documents(user_id: str):
                 "id": obj["Key"],
                 "title": meta["Metadata"].get("title", "Untitled"),
                 "color": meta["Metadata"].get("color", "#000000"),
+                "docType": meta["Metadata"].get("doc_type", "Other"),
                 "url": url,
                 "mimeType": meta["ContentType"],
             })
@@ -202,6 +204,28 @@ def list_documents(user_id: str):
             continue
 
     return docs
+
+
+@app.patch("/wallet/documents/{key:path}")
+async def update_document(key: str, user_id: str = Form(...), title: str = Form(...), color: str = Form(...)):
+    if not S3_BUCKET:
+        raise HTTPException(status_code=500, detail="S3 bucket not configured")
+
+    s3 = get_s3_client()
+    try:
+        head = s3.head_object(Bucket=S3_BUCKET, Key=key)
+        existing_meta = head.get("Metadata", {})
+        s3.copy_object(
+            Bucket=S3_BUCKET,
+            CopySource={"Bucket": S3_BUCKET, "Key": key},
+            Key=key,
+            Metadata={**existing_meta, "title": title, "color": color},
+            MetadataDirective="REPLACE",
+        )
+    except ClientError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {"message": "Document updated"}
 
 
 @app.delete("/wallet/documents/{key:path}")
