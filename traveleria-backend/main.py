@@ -1,7 +1,14 @@
-from fastapi import FastAPI, HTTPException
+import os
+import uuid
+
+import boto3
+from dotenv import load_dotenv
+
+load_dotenv()
+from botocore.exceptions import ClientError
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List
 
 app = FastAPI()
 
@@ -20,7 +27,7 @@ class Trip(BaseModel):
     id: str
     title: str
     location: str
-    date: str  # This matches the "DD.MM.YYYY - DD.MM.YYYY" format from your app
+    date: str
 
 
 class ChatMessage(BaseModel):
@@ -47,10 +54,22 @@ itineraries_db = {
         {"id": "101", "time": "09:00", "place": "Colosseum", "address": "Piazza del Colosseo, 1"},
         {"id": "102", "time": "12:30", "place": "Trattoria Romano", "address": "Via delle Muratte, 9"},
     ],
-    "default": [
-        {"id": "0", "time": "10:00", "place": "Local Landmark", "address": "City Center"}
-    ]
 }
+
+
+# --- S3 Client Setup ---
+
+S3_BUCKET = os.getenv("S3_BUCKET_NAME")
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+
+def get_s3_client():
+    return boto3.client(
+        "s3",
+        region_name=AWS_REGION,
+        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+        aws_session_token=os.getenv("AWS_SESSION_TOKEN"),
+    )
 
 
 # --- Endpoints ---
@@ -101,8 +120,94 @@ def chat_with_ai(message: ChatMessage):
     return {"text": response}
 
 
+# 4. Wallet / S3 Document Storage
+
+@app.post("/wallet/upload")
+async def upload_document(
+    file: UploadFile = File(...),
+    title: str = Form(...),
+    color: str = Form(...),
+):
+    if not S3_BUCKET:
+        raise HTTPException(status_code=500, detail="S3 bucket not configured")
+
+    s3 = get_s3_client()
+    key = f"wallet/{uuid.uuid4()}-{file.filename}"
+    content = await file.read()
+
+    try:
+        s3.put_object(
+            Bucket=S3_BUCKET,
+            Key=key,
+            Body=content,
+            ContentType=file.content_type or "application/octet-stream",
+            Metadata={"title": title, "color": color},
+        )
+    except ClientError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Return a presigned URL valid for 1 hour
+    url = s3.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": S3_BUCKET, "Key": key},
+        ExpiresIn=3600,
+    )
+    return {
+        "id": key,
+        "title": title,
+        "color": color,
+        "url": url,
+        "mimeType": file.content_type,
+    }
+
+
+@app.get("/wallet/documents")
+def list_documents():
+    if not S3_BUCKET:
+        raise HTTPException(status_code=500, detail="S3 bucket not configured")
+
+    s3 = get_s3_client()
+    try:
+        response = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix="wallet/")
+    except ClientError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    docs = []
+    for obj in response.get("Contents", []):
+        try:
+            meta = s3.head_object(Bucket=S3_BUCKET, Key=obj["Key"])
+            url = s3.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": S3_BUCKET, "Key": obj["Key"]},
+                ExpiresIn=3600,
+            )
+            docs.append({
+                "id": obj["Key"],
+                "title": meta["Metadata"].get("title", "Untitled"),
+                "color": meta["Metadata"].get("color", "#000000"),
+                "url": url,
+                "mimeType": meta["ContentType"],
+            })
+        except ClientError:
+            continue
+
+    return docs
+
+
+@app.delete("/wallet/documents/{key:path}")
+def delete_document(key: str):
+    if not S3_BUCKET:
+        raise HTTPException(status_code=500, detail="S3 bucket not configured")
+
+    s3 = get_s3_client()
+    try:
+        s3.delete_object(Bucket=S3_BUCKET, Key=key)
+    except ClientError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {"message": "Document deleted"}
+
+
 if __name__ == "__main__":
     import uvicorn
-
-    # Make sure host is 0.0.0.0 to allow access from your phone
     uvicorn.run(app, host="0.0.0.0", port=8000)

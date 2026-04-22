@@ -1,20 +1,21 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
-    Animated,
-    FlatList,
-    Image,
-    Modal,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Animated,
+  FlatList,
+  Image,
+  Modal,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+  ActivityIndicator,
 } from "react-native";
 import { WebView } from "react-native-webview";
+import { API_URL } from "../../constants/api";
 
-// Apple Wallet style colors
 const APPLE_COLORS = [
   "#000000",
   "#FF3B30",
@@ -26,44 +27,80 @@ const APPLE_COLORS = [
 
 export default function WalletScreen() {
   const [documents, setDocuments] = useState<any[]>([]);
+  const [loadingDocs, setLoadingDocs] = useState(true);
+  const [uploading, setUploading] = useState(false);
 
-  // State for Add Document Modal
   const [isAddModalVisible, setAddModalVisible] = useState(false);
   const [newDocTitle, setNewDocTitle] = useState("");
   const [newDocColor, setNewDocColor] = useState(APPLE_COLORS[0]);
 
-  // State for Document Viewer Modal
   const [selectedDoc, setSelectedDoc] = useState<any>(null);
 
-  // --- State for Edit Document Modal ---
   const [isEditModalVisible, setEditModalVisible] = useState(false);
   const [editingDoc, setEditingDoc] = useState<any>(null);
   const [editDocTitle, setEditDocTitle] = useState("");
   const [editDocColor, setEditDocColor] = useState(APPLE_COLORS[0]);
 
-  // Create Document Function
+  const fetchDocuments = async () => {
+    try {
+      const response = await fetch(`${API_URL}/wallet/documents`);
+      const data = await response.json();
+      setDocuments(data);
+    } catch (error) {
+      console.error("Error fetching documents:", error);
+    } finally {
+      setLoadingDocs(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchDocuments();
+  }, []);
+
   const handleCreate = async () => {
     if (!newDocTitle.trim()) {
       alert("Please enter a document name");
       return;
     }
-    let result = await DocumentPicker.getDocumentAsync({ type: "*/*" });
-    if (!result.canceled) {
-      const newDoc = {
-        id: Math.random().toString(),
-        title: newDocTitle,
-        color: newDocColor,
-        uri: result.assets[0].uri,
-        mimeType: result.assets[0].mimeType,
-      };
-      setDocuments([newDoc, ...documents]);
-      setAddModalVisible(false);
+
+    const result = await DocumentPicker.getDocumentAsync({ type: "*/*" });
+    if (result.canceled) return;
+
+    const asset = result.assets[0];
+    setUploading(true);
+    setAddModalVisible(false);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", {
+        uri: asset.uri,
+        name: asset.name,
+        type: asset.mimeType || "application/octet-stream",
+      } as any);
+      formData.append("title", newDocTitle);
+      formData.append("color", newDocColor);
+
+      const response = await fetch(`${API_URL}/wallet/upload`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (response.ok) {
+        const newDoc = await response.json();
+        setDocuments((prev) => [newDoc, ...prev]);
+      } else {
+        alert("Upload failed. Please try again.");
+      }
+    } catch (error) {
+      console.error("Upload error:", error);
+      alert("Upload failed. Check your connection.");
+    } finally {
+      setUploading(false);
       setNewDocTitle("");
       setNewDocColor(APPLE_COLORS[0]);
     }
   };
 
-  // --- Edit and Delete Functions ---
   const openEditMenu = (doc: any) => {
     setEditingDoc(doc);
     setEditDocTitle(doc.title);
@@ -87,13 +124,21 @@ export default function WalletScreen() {
     setEditingDoc(null);
   };
 
-  const handleDelete = () => {
-    setDocuments(documents.filter((doc) => doc.id !== editingDoc.id));
-    setEditModalVisible(false);
-    setEditingDoc(null);
+  const handleDelete = async () => {
+    try {
+      await fetch(`${API_URL}/wallet/documents/${encodeURIComponent(editingDoc.id)}`, {
+        method: "DELETE",
+      });
+      setDocuments(documents.filter((doc) => doc.id !== editingDoc.id));
+    } catch (error) {
+      console.error("Delete error:", error);
+      alert("Failed to delete document.");
+    } finally {
+      setEditModalVisible(false);
+      setEditingDoc(null);
+    }
   };
 
-  // Render each document card
   const renderItem = ({ item, index }: any) => (
     <TouchableOpacity activeOpacity={0.9} onPress={() => setSelectedDoc(item)}>
       <Animated.View
@@ -104,8 +149,6 @@ export default function WalletScreen() {
       >
         <View style={styles.cardHeader}>
           <Text style={styles.cardTopTitle}>{item.title}</Text>
-
-          {/* The new 3-dots options button */}
           <TouchableOpacity
             style={styles.optionsButton}
             onPress={() => openEditMenu(item)}
@@ -129,15 +172,33 @@ export default function WalletScreen() {
         </TouchableOpacity>
       </View>
 
-      <FlatList
-        data={documents}
-        renderItem={renderItem}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.listContent}
-        showsVerticalScrollIndicator={false}
-      />
+      {uploading && (
+        <View style={styles.uploadingBanner}>
+          <ActivityIndicator color="#fff" size="small" />
+          <Text style={styles.uploadingText}>Uploading to secure storage...</Text>
+        </View>
+      )}
 
-      {/* --- Add Document Modal --- */}
+      {loadingDocs ? (
+        <ActivityIndicator color="#fff" size="large" style={{ marginTop: 60 }} />
+      ) : (
+        <FlatList
+          data={documents}
+          renderItem={renderItem}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={
+            <View style={styles.emptyState}>
+              <Ionicons name="wallet-outline" size={60} color="#444" />
+              <Text style={styles.emptyText}>No documents yet</Text>
+              <Text style={styles.emptySubText}>Tap + to add your first document</Text>
+            </View>
+          }
+        />
+      )}
+
+      {/* Add Document Modal */}
       <Modal visible={isAddModalVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -171,19 +232,18 @@ export default function WalletScreen() {
                 <Text style={styles.cancelBtnText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.createBtn} onPress={handleCreate}>
-                <Text style={styles.createBtnText}>Create</Text>
+                <Text style={styles.createBtnText}>Choose File</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
-      {/* --- Edit Document Modal --- */}
+      {/* Edit Document Modal */}
       <Modal visible={isEditModalVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Edit Document</Text>
-
             <TextInput
               style={styles.input}
               placeholder="Document Name..."
@@ -191,7 +251,6 @@ export default function WalletScreen() {
               value={editDocTitle}
               onChangeText={setEditDocTitle}
             />
-
             <Text style={styles.colorLabel}>Change Label Color:</Text>
             <View style={styles.colorPicker}>
               {APPLE_COLORS.map((color) => (
@@ -206,7 +265,6 @@ export default function WalletScreen() {
                 />
               ))}
             </View>
-
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={styles.cancelBtn}
@@ -214,32 +272,19 @@ export default function WalletScreen() {
               >
                 <Text style={styles.cancelBtnText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.createBtn}
-                onPress={handleSaveEdit}
-              >
+              <TouchableOpacity style={styles.createBtn} onPress={handleSaveEdit}>
                 <Text style={styles.createBtnText}>Save</Text>
               </TouchableOpacity>
             </View>
-
-            {/* Prominent Apple-style delete button */}
-            <TouchableOpacity
-              style={styles.deleteBtnFull}
-              onPress={handleDelete}
-            >
-              <Ionicons
-                name="trash-outline"
-                size={20}
-                color="#ff453a"
-                style={{ marginRight: 8 }}
-              />
+            <TouchableOpacity style={styles.deleteBtnFull} onPress={handleDelete}>
+              <Ionicons name="trash-outline" size={20} color="#ff453a" style={{ marginRight: 8 }} />
               <Text style={styles.deleteBtnFullText}>Delete Document</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
 
-      {/* --- Full Document Viewer Modal --- */}
+      {/* Full Document Viewer Modal */}
       <Modal visible={!!selectedDoc} transparent animationType="fade">
         <View style={styles.viewModalOverlay}>
           <View style={styles.viewModalHeader}>
@@ -251,18 +296,15 @@ export default function WalletScreen() {
           <View style={styles.documentContainer}>
             {selectedDoc?.mimeType?.includes("image") ? (
               <Image
-                source={{ uri: selectedDoc.uri }}
+                source={{ uri: selectedDoc.url }}
                 style={styles.fullDocImage}
                 resizeMode="contain"
               />
             ) : (
               <WebView
-                source={{ uri: selectedDoc?.uri }}
+                source={{ uri: selectedDoc?.url }}
                 style={styles.webview}
                 originWhitelist={["*"]}
-                allowFileAccess={true}
-                allowFileAccessFromFileURLs={true}
-                allowUniversalAccessFromFileURLs={true}
               />
             )}
           </View>
@@ -286,7 +328,23 @@ const styles = StyleSheet.create({
   addButton: { backgroundColor: "#1c1c1e", borderRadius: 20, padding: 5 },
   listContent: { paddingHorizontal: 20, paddingBottom: 100 },
 
-  // Wallet Card Styles
+  uploadingBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#0a84ff",
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    gap: 10,
+    marginHorizontal: 20,
+    borderRadius: 10,
+    marginBottom: 10,
+  },
+  uploadingText: { color: "#fff", fontWeight: "600", fontSize: 14 },
+
+  emptyState: { alignItems: "center", marginTop: 100 },
+  emptyText: { color: "#666", fontSize: 18, fontWeight: "bold", marginTop: 16 },
+  emptySubText: { color: "#444", fontSize: 14, marginTop: 6 },
+
   card: {
     height: 200,
     width: "100%",
@@ -311,10 +369,8 @@ const styles = StyleSheet.create({
     letterSpacing: 1.5,
     flex: 1,
   },
-  optionsButton: { padding: 5 }, // Comfortable hit area for the 3-dots button
-  cardBody: { flex: 1, justifyContent: "flex-end", marginTop: 10 },
+  optionsButton: { padding: 5 },
 
-  // Add/Edit Modal Styles
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.6)",
@@ -328,12 +384,7 @@ const styles = StyleSheet.create({
     padding: 25,
     alignItems: "center",
   },
-  modalTitle: {
-    color: "#fff",
-    fontSize: 22,
-    fontWeight: "bold",
-    marginBottom: 20,
-  },
+  modalTitle: { color: "#fff", fontSize: 22, fontWeight: "bold", marginBottom: 20 },
   input: {
     width: "100%",
     backgroundColor: "#2c2c2e",
@@ -343,12 +394,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginBottom: 20,
   },
-  colorLabel: {
-    color: "#fff",
-    alignSelf: "flex-start",
-    marginBottom: 10,
-    fontSize: 16,
-  },
+  colorLabel: { color: "#fff", alignSelf: "flex-start", marginBottom: 10, fontSize: 16 },
   colorPicker: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -363,11 +409,7 @@ const styles = StyleSheet.create({
     borderColor: "transparent",
   },
   selectedColorCircle: { borderColor: "#fff" },
-  modalButtons: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    width: "100%",
-  },
+  modalButtons: { flexDirection: "row", justifyContent: "space-between", width: "100%" },
   cancelBtn: {
     flex: 1,
     padding: 15,
@@ -386,8 +428,6 @@ const styles = StyleSheet.create({
     marginLeft: 10,
   },
   createBtnText: { color: "#fff", fontSize: 16, fontWeight: "bold" },
-
-  // New Delete Button Styles
   deleteBtnFull: {
     flexDirection: "row",
     marginTop: 20,
@@ -400,7 +440,6 @@ const styles = StyleSheet.create({
   },
   deleteBtnFullText: { color: "#ff453a", fontSize: 16, fontWeight: "bold" },
 
-  // Document Viewer Modal Styles
   viewModalOverlay: { flex: 1, backgroundColor: "#000" },
   viewModalHeader: {
     flexDirection: "row",
