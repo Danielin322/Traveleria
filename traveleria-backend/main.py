@@ -1,10 +1,17 @@
 import os
+import traceback
 import uuid
 
 import boto3
 from dotenv import load_dotenv
 
 load_dotenv()
+
+print("=== S3 CONFIG CHECK ===")
+print(f"BUCKET: {os.getenv('S3_BUCKET_NAME')}")
+print(f"REGION: {os.getenv('AWS_REGION')}")
+print(f"KEY ID : {os.getenv('AWS_ACCESS_KEY_ID', 'NOT SET')[:8]}...")
+print("========================")
 from botocore.exceptions import ClientError
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -127,12 +134,13 @@ async def upload_document(
     file: UploadFile = File(...),
     title: str = Form(...),
     color: str = Form(...),
+    user_id: str = Form(...),
 ):
     if not S3_BUCKET:
         raise HTTPException(status_code=500, detail="S3 bucket not configured")
 
     s3 = get_s3_client()
-    key = f"wallet/{uuid.uuid4()}-{file.filename}"
+    key = f"wallet/{user_id}/{uuid.uuid4()}-{file.filename}"
     content = await file.read()
 
     try:
@@ -143,7 +151,8 @@ async def upload_document(
             ContentType=file.content_type or "application/octet-stream",
             Metadata={"title": title, "color": color},
         )
-    except ClientError as e:
+    except Exception as e:
+        print(f"S3 UPLOAD ERROR: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
     # Return a presigned URL valid for 1 hour
@@ -162,14 +171,15 @@ async def upload_document(
 
 
 @app.get("/wallet/documents")
-def list_documents():
+def list_documents(user_id: str):
     if not S3_BUCKET:
         raise HTTPException(status_code=500, detail="S3 bucket not configured")
 
     s3 = get_s3_client()
     try:
-        response = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix="wallet/")
-    except ClientError as e:
+        response = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=f"wallet/{user_id}/")
+    except Exception as e:
+        print(f"S3 LIST ERROR: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
     docs = []
@@ -195,7 +205,7 @@ def list_documents():
 
 
 @app.delete("/wallet/documents/{key:path}")
-def delete_document(key: str):
+def delete_document(key: str, user_id: str):
     if not S3_BUCKET:
         raise HTTPException(status_code=500, detail="S3 bucket not configured")
 
