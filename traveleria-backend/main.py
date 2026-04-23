@@ -1,7 +1,6 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List
 
 app = FastAPI()
 
@@ -20,7 +19,7 @@ class Trip(BaseModel):
     id: str
     title: str
     location: str
-    date: str  # This matches the "DD.MM.YYYY - DD.MM.YYYY" format from your app
+    date: str
 
 
 class ChatMessage(BaseModel):
@@ -47,9 +46,6 @@ itineraries_db = {
         {"id": "101", "time": "09:00", "place": "Colosseum", "address": "Piazza del Colosseo, 1"},
         {"id": "102", "time": "12:30", "place": "Trattoria Romano", "address": "Via delle Muratte, 9"},
     ],
-    "default": [
-        {"id": "0", "time": "10:00", "place": "Local Landmark", "address": "City Center"}
-    ]
 }
 
 
@@ -59,6 +55,7 @@ itineraries_db = {
 def read_root():
     print("LOG: Someone checked the server status!")
     return {"status": "Traveleria Server is Online!"}
+
 
 # 1. Trips Management
 @app.get("/trips")
@@ -101,8 +98,11 @@ def chat_with_ai(message: ChatMessage):
     return {"text": response}
 
 
+# NOTE: Wallet / S3 document storage is handled by AWS Lambda + API Gateway.
+# See the traveleria-wallet Lambda function. The mobile app calls the API Gateway
+# URL directly (defined as WALLET_API_URL in the frontend constants).
+
+
 if __name__ == "__main__":
     import uvicorn
-
-    # Make sure host is 0.0.0.0 to allow access from your phone
     uvicorn.run(app, host="0.0.0.0", port=8000)
