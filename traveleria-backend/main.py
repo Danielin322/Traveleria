@@ -1,19 +1,4 @@
-import os
-import traceback
-import uuid
-
-import boto3
-from dotenv import load_dotenv
-
-load_dotenv()
-
-print("=== S3 CONFIG CHECK ===")
-print(f"BUCKET: {os.getenv('S3_BUCKET_NAME')}")
-print(f"REGION: {os.getenv('AWS_REGION')}")
-print(f"KEY ID : {os.getenv('AWS_ACCESS_KEY_ID', 'NOT SET')[:8]}...")
-print("========================")
-from botocore.exceptions import ClientError
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -64,27 +49,13 @@ itineraries_db = {
 }
 
 
-# --- S3 Client Setup ---
-
-S3_BUCKET = os.getenv("S3_BUCKET_NAME")
-AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
-
-def get_s3_client():
-    return boto3.client(
-        "s3",
-        region_name=AWS_REGION,
-        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-        aws_session_token=os.getenv("AWS_SESSION_TOKEN"),
-    )
-
-
 # --- Endpoints ---
 
 @app.get("/")
 def read_root():
     print("LOG: Someone checked the server status!")
     return {"status": "Traveleria Server is Online!"}
+
 
 # 1. Trips Management
 @app.get("/trips")
@@ -127,119 +98,9 @@ def chat_with_ai(message: ChatMessage):
     return {"text": response}
 
 
-# 4. Wallet / S3 Document Storage
-
-@app.post("/wallet/upload")
-async def upload_document(
-    file: UploadFile = File(...),
-    title: str = Form(...),
-    color: str = Form(...),
-    user_id: str = Form(...),
-    doc_type: str = Form("Other"),
-):
-    if not S3_BUCKET:
-        raise HTTPException(status_code=500, detail="S3 bucket not configured")
-
-    s3 = get_s3_client()
-    key = f"wallet/{user_id}/{uuid.uuid4()}-{file.filename}"
-    content = await file.read()
-
-    try:
-        s3.put_object(
-            Bucket=S3_BUCKET,
-            Key=key,
-            Body=content,
-            ContentType=file.content_type or "application/octet-stream",
-            Metadata={"title": title, "color": color, "doc_type": doc_type},
-        )
-    except Exception as e:
-        print(f"S3 UPLOAD ERROR: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-    url = s3.generate_presigned_url(
-        "get_object",
-        Params={"Bucket": S3_BUCKET, "Key": key},
-        ExpiresIn=3600,
-    )
-    return {
-        "id": key,
-        "title": title,
-        "color": color,
-        "docType": doc_type,
-        "url": url,
-        "mimeType": file.content_type,
-    }
-
-
-@app.get("/wallet/documents")
-def list_documents(user_id: str):
-    if not S3_BUCKET:
-        raise HTTPException(status_code=500, detail="S3 bucket not configured")
-
-    s3 = get_s3_client()
-    try:
-        response = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=f"wallet/{user_id}/")
-    except Exception as e:
-        print(f"S3 LIST ERROR: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-    docs = []
-    for obj in response.get("Contents", []):
-        try:
-            meta = s3.head_object(Bucket=S3_BUCKET, Key=obj["Key"])
-            url = s3.generate_presigned_url(
-                "get_object",
-                Params={"Bucket": S3_BUCKET, "Key": obj["Key"]},
-                ExpiresIn=3600,
-            )
-            docs.append({
-                "id": obj["Key"],
-                "title": meta["Metadata"].get("title", "Untitled"),
-                "color": meta["Metadata"].get("color", "#000000"),
-                "docType": meta["Metadata"].get("doc_type", "Other"),
-                "url": url,
-                "mimeType": meta["ContentType"],
-            })
-        except ClientError:
-            continue
-
-    return docs
-
-
-@app.patch("/wallet/documents/{key:path}")
-async def update_document(key: str, user_id: str = Form(...), title: str = Form(...), color: str = Form(...)):
-    if not S3_BUCKET:
-        raise HTTPException(status_code=500, detail="S3 bucket not configured")
-
-    s3 = get_s3_client()
-    try:
-        head = s3.head_object(Bucket=S3_BUCKET, Key=key)
-        existing_meta = head.get("Metadata", {})
-        s3.copy_object(
-            Bucket=S3_BUCKET,
-            CopySource={"Bucket": S3_BUCKET, "Key": key},
-            Key=key,
-            Metadata={**existing_meta, "title": title, "color": color},
-            MetadataDirective="REPLACE",
-        )
-    except ClientError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-    return {"message": "Document updated"}
-
-
-@app.delete("/wallet/documents/{key:path}")
-def delete_document(key: str, user_id: str):
-    if not S3_BUCKET:
-        raise HTTPException(status_code=500, detail="S3 bucket not configured")
-
-    s3 = get_s3_client()
-    try:
-        s3.delete_object(Bucket=S3_BUCKET, Key=key)
-    except ClientError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-    return {"message": "Document deleted"}
+# NOTE: Wallet / S3 document storage is handled by AWS Lambda + API Gateway.
+# See the traveleria-wallet Lambda function. The mobile app calls the API Gateway
+# URL directly (defined as WALLET_API_URL in the frontend constants).
 
 
 if __name__ == "__main__":
