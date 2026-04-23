@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { getCurrentUser } from "aws-amplify/auth";
 import * as DocumentPicker from "expo-document-picker";
+import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 import React, { useEffect, useRef, useState } from "react";
 import {
@@ -18,7 +19,7 @@ import {
   View,
 } from "react-native";
 import { WebView } from "react-native-webview";
-import { API_URL } from "../../constants/api";
+import { WALLET_API_URL } from "../../constants/api";
 
 const APPLE_COLORS = [
   "#000000", "#FF3B30", "#FF9500", "#34C759", "#007AFF", "#5856D6",
@@ -148,7 +149,7 @@ export default function WalletScreen() {
   const fetchDocuments = async () => {
     try {
       const userId = await getUserId();
-      const response = await fetch(`${API_URL}/wallet/documents?user_id=${userId}`);
+      const response = await fetch(`${WALLET_API_URL}/wallet/documents?user_id=${userId}`);
       const data = await response.json();
       setDocuments(data);
     } catch (error) {
@@ -171,10 +172,11 @@ export default function WalletScreen() {
     }).start();
   };
 
-  const uploadWithProgress = (formData: FormData): Promise<any> => {
+  const uploadJsonWithProgress = (payload: any): Promise<any> => {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      xhr.open("POST", `${API_URL}/wallet/upload`);
+      xhr.open("POST", `${WALLET_API_URL}/wallet/upload`);
+      xhr.setRequestHeader("Content-Type", "application/json");
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) updateProgress(e.loaded / e.total);
       };
@@ -182,11 +184,11 @@ export default function WalletScreen() {
         if (xhr.status >= 200 && xhr.status < 300) {
           resolve(JSON.parse(xhr.responseText));
         } else {
-          reject(new Error("Upload failed"));
+          reject(new Error(`Upload failed (${xhr.status}): ${xhr.responseText}`));
         }
       };
       xhr.onerror = () => reject(new Error("Network error"));
-      xhr.send(formData);
+      xhr.send(JSON.stringify(payload));
     });
   };
 
@@ -195,13 +197,19 @@ export default function WalletScreen() {
     updateProgress(0);
     try {
       const userId = await getUserId();
-      const formData = new FormData();
-      formData.append("file", { uri, name, type: mimeType } as any);
-      formData.append("title", newDocTitle);
-      formData.append("color", newDocColor);
-      formData.append("user_id", userId);
-      formData.append("doc_type", newDocType);
-      const newDoc = await uploadWithProgress(formData);
+      // Read file as base64 so we can send it as JSON through API Gateway → Lambda
+      const base64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: "base64",
+      });
+      const newDoc = await uploadJsonWithProgress({
+        file: base64,
+        filename: name,
+        mimeType,
+        title: newDocTitle,
+        color: newDocColor,
+        user_id: userId,
+        docType: newDocType,
+      });
       setDocuments((prev) => [newDoc, ...prev]);
     } catch (error) {
       console.error("Upload error:", error);
@@ -237,7 +245,7 @@ export default function WalletScreen() {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) { alert("Gallery permission is required."); return; }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ["images"],
       quality: 0.85,
     });
     if (result.canceled) return;
@@ -258,14 +266,10 @@ export default function WalletScreen() {
   const handleSaveEdit = async () => {
     if (!editDocTitle.trim()) { alert("Please enter a document name"); return; }
     try {
-      const userId = await getUserId();
-      const formData = new FormData();
-      formData.append("user_id", userId);
-      formData.append("title", editDocTitle);
-      formData.append("color", editDocColor);
-      await fetch(`${API_URL}/wallet/documents/${encodeURIComponent(editingDoc.id)}`, {
+      await fetch(`${WALLET_API_URL}/wallet/documents/${editingDoc.id}`, {
         method: "PATCH",
-        body: formData,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: editDocTitle, color: editDocColor }),
       });
       setDocuments(documents.map((doc) =>
         doc.id === editingDoc.id ? { ...doc, title: editDocTitle, color: editDocColor } : doc
@@ -280,8 +284,7 @@ export default function WalletScreen() {
 
   const handleDelete = async () => {
     try {
-      const userId = await getUserId();
-      await fetch(`${API_URL}/wallet/documents/${encodeURIComponent(editingDoc.id)}?user_id=${userId}`, { method: "DELETE" });
+      await fetch(`${WALLET_API_URL}/wallet/documents/${editingDoc.id}`, { method: "DELETE" });
       setDocuments(documents.filter((doc) => doc.id !== editingDoc.id));
     } catch (error) {
       console.error("Delete error:", error);
