@@ -12,6 +12,7 @@ import {
 // 1. MUST import useRouter to use navigation
 import { useRouter } from "expo-router";
 import { API_URL } from "../../constants/api";
+import { apiFetch } from "../../services/apiClient";
 
 export default function HomeScreen() {
   const [trips, setTrips] = useState([]);
@@ -33,7 +34,7 @@ export default function HomeScreen() {
     }
     try {
       setError(null);
-      const response = await fetch(`${API_URL}/trips`);
+      const response = await apiFetch("/trips");
       const data = await response.json();
       setTrips(data);
     } catch (err) {
@@ -55,7 +56,7 @@ export default function HomeScreen() {
     };
 
     try {
-      const response = await fetch(`${API_URL}/trips`, {
+      const response = await apiFetch("/trips", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(tripData),
