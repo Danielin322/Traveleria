@@ -20,6 +20,16 @@ export default function TabLayout() {
       />
 
       <Tabs.Screen
+        name="social"
+        options={{
+          title: "Social",
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="people-outline" size={26} color={color} />
+          ),
+        }}
+      />
+
+      <Tabs.Screen
         name="wallet"
         options={{
           title: "Wallet",
