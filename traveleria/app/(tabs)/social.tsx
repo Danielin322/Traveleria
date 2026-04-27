@@ -365,7 +365,7 @@ export default function SocialScreen() {
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>New Post</Text>
             <TextInput
-              style={[styles.composerInput, { minHeight: 240 }]}
+              style={styles.composerInput}
               placeholder="Share an experience..."
               value={draftText}
               onChangeText={setDraftText}
