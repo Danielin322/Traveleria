@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import * as ImagePicker from "expo-image-picker";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
@@ -10,14 +11,16 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { useCurrentUser } from "../../contexts/CurrentUserContext";
 import { signOutUser } from "../../services/authService";
 
 export default function ProfileScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
+  const currentUser = useCurrentUser();
 
   const [userData, setUserData] = useState({
-    fullName: "Your Name",
+    fullName: currentUser.name,
     country: "Israel",
     language: "Hebrew, English",
     age: "23",
@@ -29,9 +32,10 @@ export default function ProfileScreen() {
   useEffect(() => {
     // בודקים אם יש פרמטרים של עדכון ואם הם שונים מהמידע הנוכחי
     if (params.updatedName && params.updatedName !== userData.fullName) {
+      const updatedName = params.updatedName as string;
       setUserData((prev) => ({
         ...prev,
-        fullName: params.updatedName as string,
+        fullName: updatedName,
         country: params.updatedCountry as string,
         language: params.updatedLanguage as string,
         age: params.updatedAge as string,
@@ -39,6 +43,7 @@ export default function ProfileScreen() {
           .split(",")
           .map((i) => i.trim()),
       }));
+      currentUser.setName(updatedName);
 
       // מנקים את הפרמטרים מה-URL כדי למנוע לולאה ברינדור הבא
       router.setParams({
@@ -50,6 +55,49 @@ export default function ProfileScreen() {
       });
     }
   }, [params.updatedName]); // הוספנו תלות ספציפית במקום בכל אובייקט ה-params
+
+  const handleChangeAvatar = async () => {
+    Alert.alert("Change Profile Picture", "Choose a source", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Camera",
+        onPress: async () => {
+          const perm = await ImagePicker.requestCameraPermissionsAsync();
+          if (!perm.granted) {
+            Alert.alert("Permission needed", "Camera access is required.");
+            return;
+          }
+          const result = await ImagePicker.launchCameraAsync({
+            quality: 0.7,
+            allowsEditing: true,
+            aspect: [1, 1],
+          });
+          if (!result.canceled && result.assets?.[0]?.uri) {
+            currentUser.setAvatar(result.assets[0].uri);
+          }
+        },
+      },
+      {
+        text: "Gallery",
+        onPress: async () => {
+          const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+          if (!perm.granted) {
+            Alert.alert("Permission needed", "Gallery access is required.");
+            return;
+          }
+          const result = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            quality: 0.7,
+            allowsEditing: true,
+            aspect: [1, 1],
+          });
+          if (!result.canceled && result.assets?.[0]?.uri) {
+            currentUser.setAvatar(result.assets[0].uri);
+          }
+        },
+      },
+    ]);
+  };
 
   const handleEditNavigate = () => {
     router.push({
@@ -85,15 +133,18 @@ export default function ProfileScreen() {
 
         <View style={styles.imageContainer}>
           <Image
-            source={{ uri: "https://via.placeholder.com/150" }}
+            source={{ uri: currentUser.avatar }}
             style={styles.profileImage}
           />
-          <TouchableOpacity style={styles.cameraBadge}>
+          <TouchableOpacity
+            style={styles.cameraBadge}
+            onPress={handleChangeAvatar}
+          >
             <Ionicons name="camera" size={20} color="#fff" />
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.nameText}>{userData.fullName}</Text>
+        <Text style={styles.nameText}>{currentUser.name}</Text>
       </View>
 
       <View style={styles.statsContainer}>
