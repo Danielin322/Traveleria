@@ -1,5 +1,11 @@
 // Import the authentication functions from AWS Amplify
-import { confirmSignUp, signIn, signOut, signUp } from "aws-amplify/auth";
+import {
+  confirmSignUp,
+  deleteUser,
+  signIn,
+  signOut,
+  signUp,
+} from "aws-amplify/auth";
 
 // Interface defining the expected parameters for user registration
 interface SignUpParams {
@@ -101,6 +107,19 @@ export const signOutUser = async () => {
     // Cast error to any to access properties safely in TS
     const err = error as any;
     console.error("Error signing out:", err);
+    return { success: false, error: err };
+  }
+};
+
+export const deleteUserAccount = async () => {
+  try {
+    // This permanently deletes the currently authenticated user from Cognito
+    await deleteUser();
+    return { success: true };
+  } catch (error) {
+    // Cast error to any to handle specific AWS error messages
+    const err = error as any;
+    console.error("Error deleting user account:", err);
     return { success: false, error: err };
   }
 };

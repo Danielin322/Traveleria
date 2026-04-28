@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -12,17 +13,20 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   View,
 } from "react-native";
+import { GooglePlacesAutocomplete } from "react-native-google-places-autocomplete";
 import { API_URL } from "../constants/api";
+import DateTimePickerModal from "react-native-modal-datetime-picker";
 
 export default function TripDetailsScreen() {
   const { id, title, location, date } = useLocalSearchParams();
 
   const [viewMode, setViewMode] = useState<"itinerary" | "chat">("itinerary");
   const [loading, setLoading] = useState(true);
-  const [itinerary, setItinerary] = useState([]);
-  const [messages, setMessages] = useState([
+  const [itinerary, setItinerary] = useState<any[]>([]);
+  const [messages, setMessages] = useState<any[]>([
     {
       id: "1",
       text: `Hi! I'm your Traveleria AI. Ready to plan your trip to ${location}?`,
@@ -35,6 +39,23 @@ export default function TripDetailsScreen() {
   const [newActivity, setNewActivity] = useState("");
   const [newTime, setNewTime] = useState("");
   const [newPlace, setNewPlace] = useState("");
+  // State to control the visibility of the time picker
+  const [isTimePickerVisible, setTimePickerVisible] = useState(false);
+
+  // Function to handle the time selected by the user
+  const handleConfirmTime = (date: Date) => {
+    // Format hours with a leading zero if needed
+    const hours = date.getHours().toString().padStart(2, "0");
+
+    // Format minutes with a leading zero if needed
+    const minutes = date.getMinutes().toString().padStart(2, "0");
+
+    // Update the time state with the formatted string
+    setNewTime(`${hours}:${minutes}`);
+
+    // Hide the picker after selection
+    setTimePickerVisible(false);
+  };
 
   const sortByTime = (items: any[]) =>
     [...items].sort((a, b) => a.time.localeCompare(b.time));
@@ -188,62 +209,130 @@ export default function TripDetailsScreen() {
               />
             )}
 
-            {/* Add Event Modal */}
             <Modal
               visible={isModalVisible}
               animationType="slide"
               transparent={true}
             >
-              <View style={styles.modalOverlay}>
-                <View style={styles.modalContent}>
-                  <Text style={styles.modalTitle}>New Event</Text>
+              <TouchableOpacity
+                style={styles.modalOverlay}
+                activeOpacity={1}
+                onPress={Keyboard.dismiss}
+              >
+                <TouchableWithoutFeedback>
+                  <View style={styles.modalContent}>
+                    <Text style={styles.modalTitle}>New Event</Text>
 
-                  <Text style={styles.inputLabel}>Activity</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="e.g. Visit the Colosseum"
-                    value={newActivity}
-                    onChangeText={setNewActivity}
-                  />
-
-                  <Text style={styles.inputLabel}>Time</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="HH:MM (e.g. 09:30)"
-                    value={newTime}
-                    onChangeText={setNewTime}
-                    keyboardType="numbers-and-punctuation"
-                  />
-
-                  <Text style={styles.inputLabel}>Place</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="e.g. Piazza del Colosseo"
-                    value={newPlace}
-                    onChangeText={setNewPlace}
-                  />
-
-                  <View style={styles.modalButtons}>
-                    <TouchableOpacity
-                      style={[styles.modalButton, styles.cancelButton]}
-                      onPress={() => {
-                        setIsModalVisible(false);
-                        setNewActivity("");
-                        setNewTime("");
-                        setNewPlace("");
+                    {/* 1. Place Search - Moved to the top for better UX */}
+                    <Text style={styles.inputLabel}>Place</Text>
+                    <View
+                      style={{
+                        zIndex: 1000,
+                        elevation: 10,
+                        position: "relative",
                       }}
                     >
-                      <Text style={styles.cancelButtonText}>Cancel</Text>
-                    </TouchableOpacity>
+                      <GooglePlacesAutocomplete
+                        placeholder="e.g. Piazza del Colosseo"
+                        // Keep the list open even when user taps outside to dismiss keyboard
+                        keepResultsAfterBlur={true}
+                        onPress={(data, details = null) => {
+                          // Set the chosen address
+                          setNewPlace(data.description);
+                          // Dismiss keyboard after selection
+                          Keyboard.dismiss();
+                        }}
+                        query={{
+                          key: process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY,
+                          language: "en",
+                        }}
+                        onFail={(error) =>
+                          console.error("Google API Error: ", error)
+                        }
+                        keyboardShouldPersistTaps="handled"
+                        styles={{
+                          container: {
+                            flex: 0,
+                          },
+                          textInputContainer: {
+                            width: "100%",
+                            marginBottom: 14,
+                          },
+                          textInput: [styles.input, { marginBottom: 0 }],
+                          listView: {
+                            position: "absolute",
+                            top: 50,
+                            zIndex: 1000,
+                            elevation: 10,
+                            backgroundColor: "#fff",
+                            borderRadius: 10,
+                            shadowColor: "#000",
+                            shadowOpacity: 0.1,
+                            shadowRadius: 4,
+                            shadowOffset: { width: 0, height: 2 },
+                          },
+                        }}
+                        enablePoweredByContainer={false}
+                      />
+                    </View>
+
+                    {/* 2. Activity Input */}
+                    <Text style={styles.inputLabel}>Activity</Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="e.g. Visit the Colosseum"
+                      value={newActivity}
+                      onChangeText={setNewActivity}
+                    />
+
+                    {/* 3. Time Input */}
+                    <Text style={styles.inputLabel}>Time</Text>
+
+                    {/* Button that looks like an input to trigger the time picker */}
                     <TouchableOpacity
-                      style={[styles.modalButton, styles.saveButton]}
-                      onPress={handleAddEvent}
+                      style={[styles.input, { justifyContent: "center" }]}
+                      onPress={() => setTimePickerVisible(true)}
                     >
-                      <Text style={styles.saveButtonText}>Create</Text>
+                      <Text
+                        style={{
+                          color: newTime ? "#1a1a1a" : "#aaa",
+                          fontSize: 15,
+                        }}
+                      >
+                        {newTime ? newTime : "Select time"}
+                      </Text>
                     </TouchableOpacity>
+
+                    {/* The native modal time picker component */}
+                    <DateTimePickerModal
+                      isVisible={isTimePickerVisible}
+                      mode="time"
+                      onConfirm={handleConfirmTime}
+                      onCancel={() => setTimePickerVisible(false)}
+                    />
+
+                    <View style={styles.modalButtons}>
+                      <TouchableOpacity
+                        style={[styles.modalButton, styles.cancelButton]}
+                        onPress={() => {
+                          setIsModalVisible(false);
+                          setNewActivity("");
+                          setNewTime("");
+                          setNewPlace("");
+                        }}
+                      >
+                        <Text style={styles.cancelButtonText}>Cancel</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.modalButton, styles.saveButton]}
+                        onPress={handleAddEvent}
+                      >
+                        <Text style={styles.saveButtonText}>Create</Text>
+                      </TouchableOpacity>
+                    </View>
                   </View>
-                </View>
-              </View>
+                </TouchableWithoutFeedback>
+              </TouchableOpacity>
             </Modal>
 
             {/* Chat FAB */}
@@ -308,7 +397,12 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: "#2f6deb" },
   container: { flex: 1, backgroundColor: "#f4f6f8" },
   header: { padding: 20, backgroundColor: "#2f6deb", paddingBottom: 20 },
-  locationTag: { color: "#fff", fontSize: 12, fontWeight: "bold", opacity: 0.8 },
+  locationTag: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "bold",
+    opacity: 0.8,
+  },
   title: { color: "#fff", fontSize: 24, fontWeight: "bold", marginTop: 5 },
 
   // Section header
@@ -367,15 +461,20 @@ const styles = StyleSheet.create({
   // Modal
   modalOverlay: {
     flex: 1,
-    justifyContent: "center",
+    // Align the modal content to the top
+    justifyContent: "flex-start",
+    // Add space to clear the status bar and notch
+    paddingTop: 60,
     backgroundColor: "rgba(0,0,0,0.5)",
-    padding: 20,
+    paddingHorizontal: 20,
   },
   modalContent: {
     backgroundColor: "#fff",
     borderRadius: 20,
     padding: 25,
     elevation: 5,
+    // Ensure the modal content allows the dropdown to float above
+    zIndex: 1,
   },
   modalTitle: {
     fontSize: 22,
@@ -399,7 +498,11 @@ const styles = StyleSheet.create({
     fontSize: 15,
     backgroundColor: "#fafafa",
   },
-  modalButtons: { flexDirection: "row", justifyContent: "space-between", marginTop: 4 },
+  modalButtons: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 4,
+  },
   modalButton: {
     flex: 1,
     padding: 15,
