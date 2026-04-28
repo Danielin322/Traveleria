@@ -1,12 +1,13 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams } from "expo-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   SafeAreaView,
@@ -37,7 +38,7 @@ export default function TripDetailsScreen() {
     },
   ]);
   const [inputText, setInputText] = useState("");
-
+  const [newNotes, setNewNotes] = useState("");
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [newActivity, setNewActivity] = useState("");
   const [newTime, setNewTime] = useState("");
@@ -45,22 +46,14 @@ export default function TripDetailsScreen() {
   const [isTimePickerVisible, setTimePickerVisible] = useState(false);
   const [newLat, setNewLat] = useState<number | null>(null);
   const [newLng, setNewLng] = useState<number | null>(null);
-  // State to track if we are showing the map or the list
   const [isMapView, setIsMapView] = useState(false);
-  // State to hold the currently selected event for the map info card
+  const [editingEventId, setEditingEventId] = useState<string | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<any | null>(null);
-  // Function to handle the time selected by the user
+  const googlePlacesRef = useRef<any>(null);
   const handleConfirmTime = (date: Date) => {
-    // Format hours with a leading zero if needed
     const hours = date.getHours().toString().padStart(2, "0");
-
-    // Format minutes with a leading zero if needed
     const minutes = date.getMinutes().toString().padStart(2, "0");
-
-    // Update the time state with the formatted string
     setNewTime(`${hours}:${minutes}`);
-
-    // Hide the picker after selection
     setTimePickerVisible(false);
   };
 
@@ -95,33 +88,50 @@ export default function TripDetailsScreen() {
       time: newTime,
       place: newActivity,
       address: newPlace,
-
-      // Include the saved coordinates
       lat: newLat,
       lng: newLng,
+      notes: newNotes,
     };
 
     try {
-      const response = await fetch(`${API_URL}/trips/${id}/itinerary`, {
-        method: "POST",
+      // Determine if we are updating an existing event or creating a new one
+      const method = editingEventId ? "PUT" : "POST";
+      const url = editingEventId
+        ? `${API_URL}/trips/${id}/itinerary/${editingEventId}`
+        : `${API_URL}/trips/${id}/itinerary`;
+
+      const response = await fetch(url, {
+        method: method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(eventData),
       });
 
       if (response.ok) {
-        setItinerary((prev) => sortByTime([...prev, eventData]));
+        if (editingEventId) {
+          // Update the local state for the edited item
+          setItinerary((prev) =>
+            sortByTime(
+              prev.map((e) => (e.id === editingEventId ? eventData : e)),
+            ),
+          );
+        } else {
+          // Add the new item to the local state
+          setItinerary((prev) => sortByTime([...prev, eventData]));
+        }
+
+        // Reset form and close modal
+        setIsModalVisible(false);
+        setEditingEventId(null);
         setNewActivity("");
         setNewTime("");
         setNewPlace("");
-
-        // Reset the coordinates states
         setNewLat(null);
         setNewLng(null);
-
-        setIsModalVisible(false);
+        setNewNotes("");
+        googlePlacesRef.current?.setAddressText("");
       }
     } catch (error) {
-      console.error("Error adding event:", error);
+      console.error("Error saving event:", error);
     }
   };
 
@@ -203,6 +213,27 @@ export default function TripDetailsScreen() {
       ]);
     }
   };
+  const handleNavigate = (lat: number, lng: number, label: string) => {
+    // Select the appropriate URL scheme based on the operating system
+    const scheme = Platform.select({
+      ios: "maps:0,0?q=",
+      android: "geo:0,0?q=",
+    });
+
+    // Format the coordinates for the map query
+    const latLng = `${lat},${lng}`;
+
+    // Create the final navigation URL with a destination label
+    const url = Platform.select({
+      ios: `${scheme}${label}@${latLng}`,
+      android: `${scheme}${latLng}(${label})`,
+    });
+
+    if (url) {
+      // Open the native maps app on the device
+      Linking.openURL(url);
+    }
+  };
 
   useEffect(() => {
     fetchItinerary();
@@ -219,6 +250,13 @@ export default function TripDetailsScreen() {
         <Text style={styles.eventPlace}>{item.address}</Text>
       </View>
 
+      {/* Edit icon button */}
+      <TouchableOpacity
+        style={{ padding: 15 }}
+        onPress={() => openEditModal(item)}
+      >
+        <Ionicons name="pencil-outline" size={20} color="#2f6deb" />
+      </TouchableOpacity>
       {/* Delete icon button on the right side of the card */}
       <TouchableOpacity
         style={styles.deleteIconButton}
@@ -228,6 +266,27 @@ export default function TripDetailsScreen() {
       </TouchableOpacity>
     </View>
   );
+  const openEditModal = (event: any) => {
+    // Populate all the fields with existing data
+    setEditingEventId(event.id);
+    setNewActivity(event.place);
+    setNewTime(event.time);
+    setNewPlace(event.address);
+    setNewLat(event.lat);
+    setNewLng(event.lng);
+    setNewNotes(event.notes || "");
+
+    // First, trigger the modal to open
+    setIsModalVisible(true);
+
+    // Use a small timeout to ensure the Google Places component is mounted
+    // before we try to set its text via the ref
+    setTimeout(() => {
+      if (googlePlacesRef.current) {
+        googlePlacesRef.current.setAddressText(event.address);
+      }
+    }, 100);
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -330,6 +389,26 @@ export default function TripDetailsScreen() {
                     <Text style={styles.infoCardAddress} numberOfLines={2}>
                       {selectedEvent.address}
                     </Text>
+                    {/* Show notes section only if content exists */}
+                    {selectedEvent.notes ? (
+                      <Text style={styles.infoCardNotes}>
+                        {selectedEvent.notes}
+                      </Text>
+                    ) : null}
+                    {/* Navigation button added to the bottom of the card */}
+                    <TouchableOpacity
+                      style={styles.navigateButton}
+                      onPress={() =>
+                        handleNavigate(
+                          selectedEvent.lat,
+                          selectedEvent.lng,
+                          selectedEvent.place,
+                        )
+                      }
+                    >
+                      <Ionicons name="navigate" size={18} color="#fff" />
+                      <Text style={styles.navigateButtonText}>Navigate</Text>
+                    </TouchableOpacity>
                   </View>
                 )}
               </View>
@@ -363,8 +442,9 @@ export default function TripDetailsScreen() {
               >
                 <TouchableWithoutFeedback>
                   <View style={styles.modalContent}>
-                    <Text style={styles.modalTitle}>New Event</Text>
-
+                    <Text style={styles.modalTitle}>
+                      {editingEventId ? "Edit Event" : "New Event"}
+                    </Text>
                     {/* 1. Place Search - Moved to the top for better UX */}
                     <Text style={styles.inputLabel}>Place</Text>
                     <View
@@ -375,6 +455,7 @@ export default function TripDetailsScreen() {
                       }}
                     >
                       <GooglePlacesAutocomplete
+                        ref={googlePlacesRef}
                         placeholder="e.g. Piazza del Colosseo"
                         // Keep the list open even when user taps outside to dismiss keyboard
                         keepResultsAfterBlur={true}
@@ -464,23 +545,45 @@ export default function TripDetailsScreen() {
                       onCancel={() => setTimePickerVisible(false)}
                     />
 
+                    <Text style={styles.inputLabel}>Notes</Text>
+                    <TextInput
+                      style={[
+                        styles.input,
+                        { height: 80, textAlignVertical: "top" },
+                      ]}
+                      placeholder="Special instructions or tips..."
+                      value={newNotes}
+                      onChangeText={setNewNotes}
+                      multiline={true}
+                    />
+
                     <View style={styles.modalButtons}>
                       <TouchableOpacity
                         style={[styles.modalButton, styles.cancelButton]}
                         onPress={() => {
                           setIsModalVisible(false);
+                          setEditingEventId(null);
                           setNewActivity("");
                           setNewTime("");
                           setNewPlace("");
+                          setNewLat(null);
+                          setNewLng(null);
+                          setNewNotes("");
+
+                          // Clear the text from the Google Places input
+                          googlePlacesRef.current?.setAddressText("");
                         }}
                       >
                         <Text style={styles.cancelButtonText}>Cancel</Text>
                       </TouchableOpacity>
+
                       <TouchableOpacity
                         style={[styles.modalButton, styles.saveButton]}
                         onPress={handleAddEvent}
                       >
-                        <Text style={styles.saveButtonText}>Create</Text>
+                        <Text style={styles.saveButtonText}>
+                          {editingEventId ? "Save Changes" : "Create"}
+                        </Text>
                       </TouchableOpacity>
                     </View>
                   </View>
@@ -809,5 +912,29 @@ const styles = StyleSheet.create({
   infoCardAddress: {
     fontSize: 14,
     color: "#666",
+  },
+  navigateButton: {
+    backgroundColor: "#2f6deb",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginTop: 12,
+    gap: 8,
+  },
+  navigateButtonText: {
+    color: "#fff",
+    fontWeight: "bold",
+    fontSize: 14,
+  },
+  infoCardNotes: {
+    fontSize: 13,
+    color: "#444",
+    fontStyle: "italic",
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: "#f0f0f0",
   },
 });
