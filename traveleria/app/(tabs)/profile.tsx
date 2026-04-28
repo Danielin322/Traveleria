@@ -239,19 +239,21 @@ const styles = StyleSheet.create({
   interestText: { color: "#2f6deb", fontWeight: "600", fontSize: 14 },
   logoutButton: {
     flexDirection: "row",
-    margin: 20,
-    padding: 18,
-    borderRadius: 15,
+    marginTop: 10, // Reduced space from top
+    marginLeft: 20, // Keeping some space from the left edge
+    paddingVertical: 8, // Smaller vertical padding
+    paddingHorizontal: 12, // Smaller horizontal padding
+    borderRadius: 10, // Slightly smaller radius to match smaller size
     alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1.5,
+    alignSelf: "flex-start", // Forces the button to the left and shrinks it to its content
+    borderWidth: 1, // Thinner border for a delicate look
     borderColor: "#ff4d4d",
     backgroundColor: "rgba(255, 77, 77, 0.05)",
   },
   logoutText: {
     color: "#ff4d4d",
     fontWeight: "bold",
-    fontSize: 16,
-    marginLeft: 10,
+    fontSize: 14, // Slightly smaller font size
+    marginLeft: 8, // Tighter space between icon and text
   },
 });
