@@ -3,6 +3,7 @@ import { useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
@@ -17,8 +18,10 @@ import {
   View,
 } from "react-native";
 import { GooglePlacesAutocomplete } from "react-native-google-places-autocomplete";
-import { API_URL } from "../constants/api";
 import DateTimePickerModal from "react-native-modal-datetime-picker";
+import { API_URL } from "../constants/api";
+// Import MapView and Marker components for the interactive map
+import MapView, { Marker } from "react-native-maps";
 
 export default function TripDetailsScreen() {
   const { id, title, location, date } = useLocalSearchParams();
@@ -39,9 +42,13 @@ export default function TripDetailsScreen() {
   const [newActivity, setNewActivity] = useState("");
   const [newTime, setNewTime] = useState("");
   const [newPlace, setNewPlace] = useState("");
-  // State to control the visibility of the time picker
   const [isTimePickerVisible, setTimePickerVisible] = useState(false);
-
+  const [newLat, setNewLat] = useState<number | null>(null);
+  const [newLng, setNewLng] = useState<number | null>(null);
+  // State to track if we are showing the map or the list
+  const [isMapView, setIsMapView] = useState(false);
+  // State to hold the currently selected event for the map info card
+  const [selectedEvent, setSelectedEvent] = useState<any | null>(null);
   // Function to handle the time selected by the user
   const handleConfirmTime = (date: Date) => {
     // Format hours with a leading zero if needed
@@ -73,13 +80,25 @@ export default function TripDetailsScreen() {
   };
 
   const handleAddEvent = async () => {
-    if (!newActivity || !newTime || !newPlace) return;
+    // Ensure all fields including coordinates are present before adding
+    if (
+      !newActivity ||
+      !newTime ||
+      !newPlace ||
+      newLat === null ||
+      newLng === null
+    )
+      return;
 
     const eventData = {
       id: Math.random().toString(),
       time: newTime,
       place: newActivity,
       address: newPlace,
+
+      // Include the saved coordinates
+      lat: newLat,
+      lng: newLng,
     };
 
     try {
@@ -94,11 +113,57 @@ export default function TripDetailsScreen() {
         setNewActivity("");
         setNewTime("");
         setNewPlace("");
+
+        // Reset the coordinates states
+        setNewLat(null);
+        setNewLng(null);
+
         setIsModalVisible(false);
       }
     } catch (error) {
       console.error("Error adding event:", error);
     }
+  };
+
+  // Function to handle event deletion with confirmation
+  const handleDeleteEvent = (eventId: string) => {
+    Alert.alert(
+      "Delete Event",
+      "Are you sure you want to remove this event from your daily plan?",
+      [
+        {
+          // Option to cancel the deletion
+          text: "Cancel",
+          style: "cancel",
+        },
+        {
+          // Option to proceed with the deletion
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              // Send the DELETE request to the backend API
+              const response = await fetch(
+                `${API_URL}/trips/${id}/itinerary/${eventId}`,
+                {
+                  method: "DELETE",
+                },
+              );
+
+              if (response.ok) {
+                // Update the local state by filtering out the removed event
+                setItinerary((prev) =>
+                  prev.filter((event) => event.id !== eventId),
+                );
+              }
+            } catch (error) {
+              // Log any errors during the deletion process
+              console.error("Error deleting event:", error);
+            }
+          },
+        },
+      ],
+    );
   };
 
   const sendMessage = async () => {
@@ -153,6 +218,14 @@ export default function TripDetailsScreen() {
         <Text style={styles.eventActivity}>{item.place}</Text>
         <Text style={styles.eventPlace}>{item.address}</Text>
       </View>
+
+      {/* Delete icon button on the right side of the card */}
+      <TouchableOpacity
+        style={styles.deleteIconButton}
+        onPress={() => handleDeleteEvent(item.id)}
+      >
+        <Ionicons name="trash-outline" size={20} color="#ff4d4d" />
+      </TouchableOpacity>
     </View>
   );
 
@@ -173,30 +246,99 @@ export default function TripDetailsScreen() {
 
         {viewMode === "itinerary" ? (
           <View style={{ flex: 1 }}>
+            <View
+              style={[
+                styles.sectionHeader,
+                { paddingHorizontal: 20, paddingTop: 15 },
+              ]}
+            >
+              <Text style={styles.sectionTitle}>Daily Plan</Text>
+
+              <View style={{ flexDirection: "row", gap: 10 }}>
+                <TouchableOpacity
+                  style={styles.iconButton}
+                  onPress={() => setIsMapView(!isMapView)}
+                >
+                  <Ionicons
+                    name={isMapView ? "list" : "map"}
+                    size={20}
+                    color="#2f6deb"
+                  />
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.addButton}
+                  onPress={() => setIsModalVisible(true)}
+                >
+                  <Ionicons name="add" size={20} color="#fff" />
+                  <Text style={styles.addButtonText}>Add Event</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
             {loading ? (
               <ActivityIndicator
                 size="large"
                 color="#2f6deb"
                 style={{ marginTop: 50 }}
               />
+            ) : isMapView ? (
+              <View style={styles.mapContainer}>
+                <MapView
+                  style={styles.map}
+                  // Clear selection when tapping anywhere else on the map
+                  onPress={() => setSelectedEvent(null)}
+                  initialRegion={{
+                    latitude:
+                      itinerary.length > 0 && itinerary[0].lat
+                        ? itinerary[0].lat
+                        : 41.8902,
+                    longitude:
+                      itinerary.length > 0 && itinerary[0].lng
+                        ? itinerary[0].lng
+                        : 12.4922,
+                    latitudeDelta: 0.05,
+                    longitudeDelta: 0.05,
+                  }}
+                >
+                  {itinerary.map((item) =>
+                    item.lat && item.lng ? (
+                      <Marker
+                        key={item.id}
+                        coordinate={{ latitude: item.lat, longitude: item.lng }}
+                        // When a marker is pressed, set it as the selected event
+                        onPress={(e) => {
+                          // Prevent the map onPress from firing
+                          e.stopPropagation();
+                          setSelectedEvent(item);
+                        }}
+                      />
+                    ) : null,
+                  )}
+                </MapView>
+                {/* Custom Info Card overlay */}
+                {selectedEvent && (
+                  <View style={styles.infoCard}>
+                    <View style={styles.infoCardHeader}>
+                      <Text style={styles.infoCardTitle}>
+                        {selectedEvent.place}
+                      </Text>
+                      <Text style={styles.infoCardTime}>
+                        {selectedEvent.time}
+                      </Text>
+                    </View>
+                    <Text style={styles.infoCardAddress} numberOfLines={2}>
+                      {selectedEvent.address}
+                    </Text>
+                  </View>
+                )}
+              </View>
             ) : (
               <FlatList
                 data={itinerary}
                 renderItem={renderEventCard}
                 keyExtractor={(item) => item.id}
                 contentContainerStyle={styles.listPadding}
-                ListHeaderComponent={
-                  <View style={styles.sectionHeader}>
-                    <Text style={styles.sectionTitle}>Daily Plan</Text>
-                    <TouchableOpacity
-                      style={styles.addButton}
-                      onPress={() => setIsModalVisible(true)}
-                    >
-                      <Ionicons name="add" size={20} color="#fff" />
-                      <Text style={styles.addButtonText}>Add Event</Text>
-                    </TouchableOpacity>
-                  </View>
-                }
                 ListEmptyComponent={
                   <View style={styles.emptyState}>
                     <Ionicons name="calendar-outline" size={48} color="#ccc" />
@@ -236,9 +378,20 @@ export default function TripDetailsScreen() {
                         placeholder="e.g. Piazza del Colosseo"
                         // Keep the list open even when user taps outside to dismiss keyboard
                         keepResultsAfterBlur={true}
+                        // Fetch full details including geometry for the coordinates
+                        fetchDetails={true}
                         onPress={(data, details = null) => {
                           // Set the chosen address
                           setNewPlace(data.description);
+                          // Save the coordinates if details are available
+                          if (
+                            details &&
+                            details.geometry &&
+                            details.geometry.location
+                          ) {
+                            setNewLat(details.geometry.location.lat);
+                            setNewLng(details.geometry.location.lng);
+                          }
                           // Dismiss keyboard after selection
                           Keyboard.dismiss();
                         }}
@@ -584,6 +737,11 @@ const styles = StyleSheet.create({
     marginRight: 10,
     fontSize: 16,
   },
+  deleteIconButton: {
+    padding: 15,
+    justifyContent: "center",
+    alignItems: "center",
+  },
   sendButton: {
     backgroundColor: "#2f6deb",
     paddingVertical: 10,
@@ -591,4 +749,65 @@ const styles = StyleSheet.create({
     borderRadius: 20,
   },
   sendButtonText: { color: "#fff", fontWeight: "bold" },
+  iconButton: {
+    padding: 8,
+    backgroundColor: "#eef2ff",
+    borderRadius: 20,
+    justifyContent: "center",
+    alignItems: "center",
+    width: 40,
+    height: 40,
+  },
+  mapContainer: {
+    flex: 1,
+    marginHorizontal: 20,
+    marginBottom: 100,
+    borderRadius: 20,
+    overflow: "hidden",
+    elevation: 4,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 5,
+  },
+  map: {
+    width: "100%",
+    height: "100%",
+  },
+  infoCard: {
+    position: "absolute",
+    bottom: 20,
+    left: 20,
+    right: 20,
+    backgroundColor: "#fff",
+    borderRadius: 15,
+    padding: 15,
+    elevation: 5,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 5,
+  },
+  infoCardHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 5,
+  },
+  infoCardTitle: {
+    fontSize: 18,
+    fontWeight: "bold",
+    color: "#1a1a1a",
+    flex: 1,
+  },
+  infoCardTime: {
+    fontSize: 14,
+    fontWeight: "bold",
+    color: "#2f6deb",
+    marginLeft: 10,
+  },
+  infoCardAddress: {
+    fontSize: 14,
+    color: "#666",
+  },
 });
