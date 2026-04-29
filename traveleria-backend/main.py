@@ -1,6 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Optional
 
 app = FastAPI()
 
@@ -32,6 +33,9 @@ class ItineraryItem(BaseModel):
     time: str
     place: str
     address: str
+    lat: float
+    lng: float
+    notes: Optional[str] = None
 
 
 # --- Mock Databases (Temporary until AWS RDS) ---
@@ -43,8 +47,24 @@ trips_db = [
 
 itineraries_db = {
     "1": [
-        {"id": "101", "time": "09:00", "place": "Colosseum", "address": "Piazza del Colosseo, 1"},
-        {"id": "102", "time": "12:30", "place": "Trattoria Romano", "address": "Via delle Muratte, 9"},
+        {
+            "id": "101",
+            "time": "09:00",
+            "place": "Colosseum",
+            "address": "Piazza del Colosseo, 1",
+            "lat": 41.8902,
+            "lng": 12.4922,
+            "notes": None
+        },
+        {
+            "id": "102",
+            "time": "12:30",
+            "place": "Trattoria Romano",
+            "address": "Via delle Muratte, 9",
+            "lat": 41.9006,
+            "lng": 12.4833,
+            "notes": None
+        },
     ],
 }
 
@@ -81,6 +101,44 @@ def add_itinerary_item(trip_id: str, item: ItineraryItem):
         itineraries_db[trip_id] = []
     itineraries_db[trip_id].append(item.dict())
     return {"message": "Event added successfully", "item": item}
+
+
+@app.delete("/trips/{trip_id}/itinerary/{event_id}")
+def delete_itinerary_item(trip_id: str, event_id: str):
+    # Check if the trip exists
+    if trip_id in itineraries_db:
+        # Filter out the deleted item
+        initial_length = len(itineraries_db[trip_id])
+        itineraries_db[trip_id] = [item for item in itineraries_db[trip_id] if item["id"] != event_id]
+
+        # Check if an item was actually removed
+        if len(itineraries_db[trip_id]) < initial_length:
+            return {"message": "Event deleted successfully"}
+
+    # Return error if event was not found
+    raise HTTPException(status_code=404, detail="Event not found")
+
+
+@app.put("/trips/{trip_id}/itinerary/{event_id}")
+def update_itinerary_item(trip_id: str, event_id: str, updated_item: ItineraryItem):
+    # Print to the console what the server is actually looking for
+    print(f"DEBUG: Searching for trip {trip_id} and event {event_id}")
+
+    # Check if the trip exists in our mock database
+    if trip_id in itineraries_db:
+        # Print all existing IDs for this trip to see if there is a mismatch
+        existing_ids = [item["id"] for item in itineraries_db[trip_id]]
+        print(f"DEBUG: Trip found. Existing event IDs: {existing_ids}")
+
+        # Find the specific event and update its data
+        for i, item in enumerate(itineraries_db[trip_id]):
+            if item["id"] == event_id:
+                itineraries_db[trip_id][i] = updated_item.dict()
+                return {"message": "Event updated successfully", "item": updated_item}
+
+    # If the trip or event wasn't found, return an error
+    print(f"DEBUG: Target ID {event_id} was not found in the list above.")
+    raise HTTPException(status_code=404, detail="Event not found")
 
 
 # 3. AI Chat Logic
