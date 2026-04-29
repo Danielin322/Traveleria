@@ -73,15 +73,31 @@ export default function TripDetailsScreen() {
   };
 
   const handleAddEvent = async () => {
-    // Ensure all fields including coordinates are present before adding
+    // Log the current state values to see what is missing during edit
+    console.log("Edit Check:", {
+      newActivity,
+      newTime,
+      newPlace,
+      newLat,
+      newLng,
+      newNotes,
+    });
+
+    // Ensure all fields including coordinates are present and not undefined
     if (
       !newActivity ||
       !newTime ||
       !newPlace ||
       newLat === null ||
-      newLng === null
-    )
+      newLat === undefined ||
+      newLng === null ||
+      newLng === undefined
+    ) {
+      alert(
+        "Please make sure to select a valid location from the search suggestions so coordinates are saved.",
+      );
       return;
+    }
 
     const eventData = {
       // Keep the existing ID if we are editing, otherwise generate a new one
