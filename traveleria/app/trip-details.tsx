@@ -84,7 +84,8 @@ export default function TripDetailsScreen() {
       return;
 
     const eventData = {
-      id: Math.random().toString(),
+      // Keep the existing ID if we are editing, otherwise generate a new one
+      id: editingEventId ? editingEventId : Math.random().toString(),
       time: newTime,
       place: newActivity,
       address: newPlace,
@@ -94,7 +95,6 @@ export default function TripDetailsScreen() {
     };
 
     try {
-      // Determine if we are updating an existing event or creating a new one
       const method = editingEventId ? "PUT" : "POST";
       const url = editingEventId
         ? `${API_URL}/trips/${id}/itinerary/${editingEventId}`
@@ -128,7 +128,15 @@ export default function TripDetailsScreen() {
         setNewLat(null);
         setNewLng(null);
         setNewNotes("");
-        googlePlacesRef.current?.setAddressText("");
+
+        if (googlePlacesRef.current) {
+          googlePlacesRef.current.setAddressText("");
+        }
+      } else {
+        // Read the exact error message from the server
+        const errorText = await response.text();
+        console.error("Server rejected the save:", response.status, errorText);
+        alert(`Server error ${response.status}. Check terminal for details.`);
       }
     } catch (error) {
       console.error("Error saving event:", error);
