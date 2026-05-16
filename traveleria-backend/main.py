@@ -313,6 +313,9 @@ def chat_with_ai(message: ChatMessage, _current_user: dict = Depends(get_current
 handler = Mangum(app)
 
 
+handler = Mangum(app)
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
