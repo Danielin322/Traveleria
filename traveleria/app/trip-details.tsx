@@ -123,15 +123,12 @@ export default function TripDetailsScreen() {
 
       if (response.ok) {
         if (editingEventId) {
-          // Update the local state for the edited item
           setItinerary((prev) =>
-            sortByTime(
-              prev.map((e) => (e.id === editingEventId ? eventData : e)),
-            ),
+            sortByTime(prev.map((e) => (e.id === editingEventId ? eventData : e))),
           );
         } else {
-          // Add the new item to the local state
-          setItinerary((prev) => sortByTime([...prev, eventData]));
+          const data = await response.json();
+          setItinerary((prev) => sortByTime([...prev, data.item]));
         }
 
         // Reset form and close modal

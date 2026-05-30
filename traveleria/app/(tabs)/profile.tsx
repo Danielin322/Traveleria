@@ -1,7 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useFocusEffect, useRouter } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   Alert,
   Image,
@@ -11,92 +12,64 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { useCurrentUser } from "../../contexts/CurrentUserContext";
+import { apiFetch } from "../../services/apiClient";
 import { signOutUser } from "../../services/authService";
+
+const PHOTO_KEY = "profile_photo_uri";
 
 export default function ProfileScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams();
-  const currentUser = useCurrentUser();
+
+  const [photoUri, setPhotoUri] = useState<string | null>(null);
 
   const [userData, setUserData] = useState({
-    fullName: currentUser.name,
-    country: "Israel",
-    language: "Hebrew, English",
-    age: "23",
-    tripsCount: 4,
-    interests: ["Shopping", "Museums", "Hiking", "AI & Automation"],
+    fullName: "",
+    country: "",
+    language: "",
+    age: "",
+    tripsCount: 0,
+    interests: [] as string[],
   });
 
-  // התיקון ללולאה האינסופית
-  useEffect(() => {
-    // בודקים אם יש פרמטרים של עדכון ואם הם שונים מהמידע הנוכחי
-    if (params.updatedName && params.updatedName !== userData.fullName) {
-      const updatedName = params.updatedName as string;
-      setUserData((prev) => ({
-        ...prev,
-        fullName: updatedName,
-        country: params.updatedCountry as string,
-        language: params.updatedLanguage as string,
-        age: params.updatedAge as string,
-        interests: (params.updatedInterests as string)
-          .split(",")
-          .map((i) => i.trim()),
-      }));
-      currentUser.setName(updatedName);
-
-      // מנקים את הפרמטרים מה-URL כדי למנוע לולאה ברינדור הבא
-      router.setParams({
-        updatedName: "",
-        updatedCountry: "",
-        updatedLanguage: "",
-        updatedAge: "",
-        updatedInterests: "",
+  const fetchProfile = async () => {
+    try {
+      const response = await apiFetch("/users/me");
+      const data = await response.json();
+      setUserData({
+        fullName: data.full_name || "",
+        country: data.country || "",
+        language: data.language || "",
+        age: data.age ? String(data.age) : "",
+        tripsCount: data.trips_count || 0,
+        interests: data.interests ? data.interests.split(",").map((i: string) => i.trim()) : [],
       });
+    } catch (err) {
+      console.error("Error fetching profile:", err);
     }
-  }, [params.updatedName]); // הוספנו תלות ספציפית במקום בכל אובייקט ה-params
+  };
 
-  const handleChangeAvatar = async () => {
-    Alert.alert("Change Profile Picture", "Choose a source", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Camera",
-        onPress: async () => {
-          const perm = await ImagePicker.requestCameraPermissionsAsync();
-          if (!perm.granted) {
-            Alert.alert("Permission needed", "Camera access is required.");
-            return;
-          }
-          const result = await ImagePicker.launchCameraAsync({
-            quality: 0.7,
-            allowsEditing: true,
-            aspect: [1, 1],
-          });
-          if (!result.canceled && result.assets?.[0]?.uri) {
-            currentUser.setAvatar(result.assets[0].uri);
-          }
-        },
-      },
-      {
-        text: "Gallery",
-        onPress: async () => {
-          const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-          if (!perm.granted) {
-            Alert.alert("Permission needed", "Gallery access is required.");
-            return;
-          }
-          const result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
-            quality: 0.7,
-            allowsEditing: true,
-            aspect: [1, 1],
-          });
-          if (!result.canceled && result.assets?.[0]?.uri) {
-            currentUser.setAvatar(result.assets[0].uri);
-          }
-        },
-      },
-    ]);
+  useFocusEffect(useCallback(() => {
+    fetchProfile();
+    AsyncStorage.getItem(PHOTO_KEY).then((uri) => { if (uri) setPhotoUri(uri); });
+  }, []));
+
+  const handleChangePhoto = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert("Permission required", "Allow access to your photo library to set a profile photo.");
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.7,
+    });
+    if (!result.canceled) {
+      const uri = result.assets[0].uri;
+      setPhotoUri(uri);
+      AsyncStorage.setItem(PHOTO_KEY, uri);
+    }
   };
 
   const handleEditNavigate = () => {
@@ -132,19 +105,19 @@ export default function ProfileScreen() {
         </TouchableOpacity>
 
         <View style={styles.imageContainer}>
-          <Image
-            source={{ uri: currentUser.avatar }}
-            style={styles.profileImage}
-          />
-          <TouchableOpacity
-            style={styles.cameraBadge}
-            onPress={handleChangeAvatar}
-          >
+          {photoUri ? (
+            <Image source={{ uri: photoUri }} style={styles.profileImage} />
+          ) : (
+            <View style={[styles.profileImage, styles.avatarPlaceholder]}>
+              <Ionicons name="person" size={64} color="#b0b8c1" />
+            </View>
+          )}
+          <TouchableOpacity style={styles.cameraBadge} onPress={handleChangePhoto}>
             <Ionicons name="camera" size={20} color="#fff" />
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.nameText}>{currentUser.name}</Text>
+        <Text style={styles.nameText}>{userData.fullName}</Text>
       </View>
 
       <View style={styles.statsContainer}>
@@ -222,6 +195,11 @@ const styles = StyleSheet.create({
     borderWidth: 4,
     borderColor: "#f0f2f5",
   },
+  avatarPlaceholder: {
+    backgroundColor: "#e8edf2",
+    justifyContent: "center",
+    alignItems: "center",
+  },
   cameraBadge: {
     position: "absolute",
     bottom: 0,
@@ -290,21 +268,19 @@ const styles = StyleSheet.create({
   interestText: { color: "#2f6deb", fontWeight: "600", fontSize: 14 },
   logoutButton: {
     flexDirection: "row",
-    marginTop: 10, // Reduced space from top
-    marginLeft: 20, // Keeping some space from the left edge
-    paddingVertical: 8, // Smaller vertical padding
-    paddingHorizontal: 12, // Smaller horizontal padding
-    borderRadius: 10, // Slightly smaller radius to match smaller size
+    margin: 20,
+    padding: 18,
+    borderRadius: 15,
     alignItems: "center",
-    alignSelf: "flex-start", // Forces the button to the left and shrinks it to its content
-    borderWidth: 1, // Thinner border for a delicate look
+    justifyContent: "center",
+    borderWidth: 1.5,
     borderColor: "#ff4d4d",
     backgroundColor: "rgba(255, 77, 77, 0.05)",
   },
   logoutText: {
     color: "#ff4d4d",
     fontWeight: "bold",
-    fontSize: 14, // Slightly smaller font size
-    marginLeft: 8, // Tighter space between icon and text
+    fontSize: 16,
+    marginLeft: 10,
   },
 });

@@ -52,7 +52,7 @@ export const INITIAL_POSTS: Post[] = [
     user: USERS[0],
     text: "Sunset at Santorini was unreal — colors I've never seen before.",
     imageUri:
-      "https://images.unsplash.com/photo-1515861461225-1ce2b9576d59?w=900&q=80",
+      "https://picsum.photos/seed/santorini/900/600",
     createdAt: "2026-04-26T18:32:00Z",
     likes: [USERS[1], USERS[2], CURRENT_USER],
     comments: [
@@ -85,7 +85,7 @@ export const INITIAL_POSTS: Post[] = [
     user: USERS[3],
     text: "Sahara at dawn ✨",
     imageUri:
-      "https://images.unsplash.com/photo-1509316785289-025f5b846b35?w=900&q=80",
+      "https://picsum.photos/seed/sahara/900/600",
     createdAt: "2026-04-24T05:45:00Z",
     likes: [USERS[0], USERS[1], USERS[2]],
     comments: [

@@ -1,70 +1,49 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import {
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    Alert,
+    KeyboardAvoidingView,
+    Platform,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from "react-native";
-import { deleteUserAccount } from "../services/authService";
+import { apiFetch } from "../services/apiClient";
 
 export default function EditProfileScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
 
-  // אתחול ה-State עם הנתונים הקיימים שהגיעו מהפרופיל
   const [name, setName] = useState((params.fullName as string) || "");
   const [country, setCountry] = useState((params.country as string) || "");
   const [language, setLanguage] = useState((params.language as string) || "");
   const [age, setAge] = useState((params.age as string) || "");
-  const [interests, setInterests] = useState(
-    (params.interests as string) || "",
-  );
+  const [interests, setInterests] = useState((params.interests as string) || "");
 
-  const handleSave = () => {
-    // שליחת הנתונים המעודכנים בחזרה למסך הפרופיל דרך הניווט
-    router.replace({
-      pathname: "/(tabs)/profile",
-      params: {
-        updatedName: name,
-        updatedCountry: country,
-        updatedLanguage: language,
-        updatedAge: age,
-        updatedInterests: interests,
-      },
-    });
-  };
-
-  const handleDeleteAccount = () => {
-    // Show a confirmation dialog before proceeding with deletion
-    Alert.alert(
-      "Delete Account",
-      "Are you sure you want to delete your account? This action cannot be undone.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: async () => {
-            const result = await deleteUserAccount();
-            if (result.success) {
-              // Redirect to the landing/login screen
-              router.replace("/");
-            } else {
-              Alert.alert(
-                "Error",
-                "Could not delete account. Please try again.",
-              );
-            }
-          },
-        },
-      ],
-    );
+  const handleSave = async () => {
+    try {
+      const response = await apiFetch("/users/me", {
+        method: "PATCH",
+        body: JSON.stringify({
+          full_name: name,
+          country,
+          language,
+          age: age ? parseInt(age) : null,
+          interests,
+        }),
+      });
+      if (response.ok) {
+        router.back();
+      } else {
+        Alert.alert("Error", "Could not save profile. Please try again.");
+      }
+    } catch (err) {
+      console.error("Error saving profile:", err);
+      Alert.alert("Error", "Could not connect to server.");
+    }
   };
 
   return (
@@ -130,12 +109,6 @@ export default function EditProfileScreen() {
             <Text style={styles.cancelButtonText}>Cancel</Text>
           </TouchableOpacity>
         </View>
-        <TouchableOpacity
-          style={styles.deleteAccountButton}
-          onPress={handleDeleteAccount}
-        >
-          <Text style={styles.deleteAccountText}>Delete Account</Text>
-        </TouchableOpacity>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -158,21 +131,6 @@ const styles = StyleSheet.create({
     padding: 15,
     fontSize: 16,
     color: "#333",
-  },
-  deleteAccountButton: {
-    marginTop: 40, // Space from the previous buttons
-    marginBottom: 20, // Space from the bottom of the scroll view
-    paddingVertical: 8, // Smaller vertical padding
-    paddingHorizontal: 15, // Horizontal padding to define button width
-    alignSelf: "center", // Keeps the button small and centered (not full width)
-    borderWidth: 1,
-    borderColor: "#ff3b30",
-    borderRadius: 8,
-  },
-  deleteAccountText: {
-    color: "#ff3b30",
-    fontSize: 14, // Slightly smaller font for a cleaner look
-    fontWeight: "500",
   },
   textArea: { height: 100, textAlignVertical: "top" },
   buttonContainer: { marginTop: 30 },
