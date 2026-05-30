@@ -2,20 +2,35 @@
 # deploy_cloudshell.sh
 # Run in AWS CloudShell after uploading and unzipping source.zip.
 # Usage: bash deploy_cloudshell.sh
+#
+# Before running, create a .env file in this directory with:
+#   DATABASE_URL=postgresql://postgres:PASSWORD@YOUR-RDS-HOST:5432/postgres
+#   COGNITO_REGION=us-east-1
+#   COGNITO_USER_POOL_ID=your-pool-id
+#   COGNITO_APP_CLIENT_ID=your-client-id
+# See .env.example for a template.
 
 set -euo pipefail
+
+# ── Load secrets from .env ────────────────────────────────────────────────
+if [ ! -f .env ]; then
+  echo "ERROR: .env file not found. Copy .env.example to .env and fill in your values."
+  exit 1
+fi
+set -o allexport
+source .env
+set +o allexport
+
+: "${DATABASE_URL:?DATABASE_URL must be set in .env}"
+: "${COGNITO_USER_POOL_ID:?COGNITO_USER_POOL_ID must be set in .env}"
+: "${COGNITO_APP_CLIENT_ID:?COGNITO_APP_CLIENT_ID must be set in .env}"
+# ─────────────────────────────────────────────────────────────────────────
 
 REGION="us-east-1"
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/LabRole"
 
-# ── Copy your DATABASE_URL from traveleria-backend/.env ──────────────────
-DATABASE_URL="postgresql://postgres:traveleria@database-1.c0g1reahyk8c.us-east-1.rds.amazonaws.com:5432/postgres"
-# ─────────────────────────────────────────────────────────────────────────
-
-COGNITO_REGION="us-east-1"
-COGNITO_USER_POOL_ID="us-east-1_hxHdB32mE"
-COGNITO_APP_CLIENT_ID="34stji8pnkourf7ficq7prt0a0"
+COGNITO_REGION="${COGNITO_REGION:-us-east-1}"
 
 ENV_JSON="{\"Variables\":{\"DATABASE_URL\":\"${DATABASE_URL}\",\"COGNITO_REGION\":\"${COGNITO_REGION}\",\"COGNITO_USER_POOL_ID\":\"${COGNITO_USER_POOL_ID}\",\"COGNITO_APP_CLIENT_ID\":\"${COGNITO_APP_CLIENT_ID}\"}}"
 
