@@ -20,9 +20,8 @@ import {
 } from "react-native";
 import { GooglePlacesAutocomplete } from "react-native-google-places-autocomplete";
 import DateTimePickerModal from "react-native-modal-datetime-picker";
-import { API_URL } from "../constants/api";
-// Import MapView and Marker components for the interactive map
 import MapView, { Marker } from "react-native-maps";
+import { apiFetch } from "../services/apiClient";
 
 export default function TripDetailsScreen() {
   const { id, title, location, date } = useLocalSearchParams();
@@ -62,7 +61,7 @@ export default function TripDetailsScreen() {
 
   const fetchItinerary = async () => {
     try {
-      const response = await fetch(`${API_URL}/trips/${id}/itinerary`);
+      const response = await apiFetch(`/trips/${id}/itinerary`);
       const data = await response.json();
       setItinerary(sortByTime(data));
     } catch (error) {
@@ -113,10 +112,10 @@ export default function TripDetailsScreen() {
     try {
       const method = editingEventId ? "PUT" : "POST";
       const url = editingEventId
-        ? `${API_URL}/trips/${id}/itinerary/${editingEventId}`
-        : `${API_URL}/trips/${id}/itinerary`;
+        ? `/trips/${id}/itinerary/${editingEventId}`
+        : `/trips/${id}/itinerary`;
 
-      const response = await fetch(url, {
+      const response = await apiFetch(url, {
         method: method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(eventData),
@@ -124,15 +123,12 @@ export default function TripDetailsScreen() {
 
       if (response.ok) {
         if (editingEventId) {
-          // Update the local state for the edited item
           setItinerary((prev) =>
-            sortByTime(
-              prev.map((e) => (e.id === editingEventId ? eventData : e)),
-            ),
+            sortByTime(prev.map((e) => (e.id === editingEventId ? eventData : e))),
           );
         } else {
-          // Add the new item to the local state
-          setItinerary((prev) => sortByTime([...prev, eventData]));
+          const data = await response.json();
+          setItinerary((prev) => sortByTime([...prev, data.item]));
         }
 
         // Reset form and close modal
@@ -177,11 +173,9 @@ export default function TripDetailsScreen() {
           onPress: async () => {
             try {
               // Send the DELETE request to the backend API
-              const response = await fetch(
-                `${API_URL}/trips/${id}/itinerary/${eventId}`,
-                {
-                  method: "DELETE",
-                },
+              const response = await apiFetch(
+                `/trips/${id}/itinerary/${eventId}`,
+                { method: "DELETE" },
               );
 
               if (response.ok) {
@@ -214,7 +208,7 @@ export default function TripDetailsScreen() {
     setInputText("");
 
     try {
-      const response = await fetch(`${API_URL}/chat`, {
+      const response = await apiFetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: currentInput, trip_id: id }),

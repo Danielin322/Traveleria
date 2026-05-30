@@ -12,6 +12,7 @@ import {
 // 1. MUST import useRouter to use navigation
 import { useRouter } from "expo-router";
 import { API_URL } from "../../constants/api";
+import { apiFetch } from "../../services/apiClient";
 
 export default function HomeScreen() {
   const [trips, setTrips] = useState([]);
@@ -24,6 +25,7 @@ export default function HomeScreen() {
   const [newTitle, setNewTitle] = useState("");
   const [newLocation, setNewLocation] = useState("");
   const [newDates, setNewDates] = useState("");
+  const [addError, setAddError] = useState<string | null>(null);
 
   const fetchTrips = async () => {
     if (!API_URL) {
@@ -33,7 +35,7 @@ export default function HomeScreen() {
     }
     try {
       setError(null);
-      const response = await fetch(`${API_URL}/trips`);
+      const response = await apiFetch("/trips");
       const data = await response.json();
       setTrips(data);
     } catch (err) {
@@ -45,20 +47,17 @@ export default function HomeScreen() {
   };
 
   const handleAddTrip = async () => {
-    if (!newTitle || !newLocation || !newDates) return;
-
-    const tripData = {
-      id: Math.random().toString(),
-      title: newTitle,
-      date: newDates,
-      location: newLocation.toUpperCase(),
-    };
+    setAddError(null);
+    if (!newTitle || !newLocation || !newDates) {
+      setAddError("Please fill in all fields.");
+      return;
+    }
 
     try {
-      const response = await fetch(`${API_URL}/trips`, {
+      const response = await apiFetch("/trips", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(tripData),
+        body: JSON.stringify({ title: newTitle, date: newDates, location: newLocation.toUpperCase() }),
       });
 
       if (response.ok) {
@@ -66,9 +65,14 @@ export default function HomeScreen() {
         setNewTitle("");
         setNewLocation("");
         setNewDates("");
+        setAddError(null);
         setIsModalVisible(false);
+      } else {
+        const data = await response.json();
+        setAddError(data?.detail || "Failed to create trip.");
       }
     } catch (err) {
+      setAddError("Could not connect to server.");
       console.error("Error adding trip:", err);
     }
   };
@@ -137,10 +141,11 @@ export default function HomeScreen() {
               value={newDates}
               onChangeText={setNewDates}
             />
+            {addError && <Text style={styles.addErrorText}>{addError}</Text>}
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => setIsModalVisible(false)}
+                onPress={() => { setIsModalVisible(false); setAddError(null); }}
               >
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
@@ -259,4 +264,5 @@ const styles = StyleSheet.create({
   errorText: { color: "#e53935", fontSize: 15, textAlign: "center", marginBottom: 16 },
   retryButton: { backgroundColor: "#2f6deb", paddingHorizontal: 24, paddingVertical: 10, borderRadius: 10 },
   retryButtonText: { color: "#fff", fontWeight: "bold" },
+  addErrorText: { color: "#e53935", fontSize: 13, textAlign: "center", marginBottom: 10 },
 });
