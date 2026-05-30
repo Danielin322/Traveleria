@@ -1,6 +1,7 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
     Animated,
     FlatList,
@@ -24,8 +25,21 @@ const APPLE_COLORS = [
   "#5856D6",
 ];
 
+const STORAGE_KEY = "wallet_documents";
+
 export default function WalletScreen() {
   const [documents, setDocuments] = useState<any[]>([]);
+
+  useEffect(() => {
+    AsyncStorage.getItem(STORAGE_KEY).then((raw) => {
+      if (raw) setDocuments(JSON.parse(raw));
+    });
+  }, []);
+
+  const saveDocuments = (docs: any[]) => {
+    setDocuments(docs);
+    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(docs));
+  };
 
   // State for Add Document Modal
   const [isAddModalVisible, setAddModalVisible] = useState(false);
@@ -56,7 +70,7 @@ export default function WalletScreen() {
         uri: result.assets[0].uri,
         mimeType: result.assets[0].mimeType,
       };
-      setDocuments([newDoc, ...documents]);
+      saveDocuments([newDoc, ...documents]);
       setAddModalVisible(false);
       setNewDocTitle("");
       setNewDocColor(APPLE_COLORS[0]);
@@ -76,7 +90,7 @@ export default function WalletScreen() {
       alert("Please enter a document name");
       return;
     }
-    setDocuments(
+    saveDocuments(
       documents.map((doc) =>
         doc.id === editingDoc.id
           ? { ...doc, title: editDocTitle, color: editDocColor }
@@ -88,7 +102,7 @@ export default function WalletScreen() {
   };
 
   const handleDelete = () => {
-    setDocuments(documents.filter((doc) => doc.id !== editingDoc.id));
+    saveDocuments(documents.filter((doc) => doc.id !== editingDoc.id));
     setEditModalVisible(false);
     setEditingDoc(null);
   };
