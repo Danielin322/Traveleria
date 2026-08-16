@@ -1,6 +1,7 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import {
+    ActivityIndicator,
     Alert,
     KeyboardAvoidingView,
     Platform,
@@ -22,8 +23,13 @@ export default function EditProfileScreen() {
   const [language, setLanguage] = useState((params.language as string) || "");
   const [age, setAge] = useState((params.age as string) || "");
   const [interests, setInterests] = useState((params.interests as string) || "");
+  // Prevents a double tap sending two PATCH requests.
+  const [isSaving, setIsSaving] = useState(false);
 
   const handleSave = async () => {
+    if (isSaving) return;
+
+    setIsSaving(true);
     try {
       const response = await apiFetch("/users/me", {
         method: "PATCH",
@@ -43,6 +49,8 @@ export default function EditProfileScreen() {
     } catch (err) {
       console.error("Error saving profile:", err);
       Alert.alert("Error", "Could not connect to server.");
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -99,12 +107,21 @@ export default function EditProfileScreen() {
         </View>
 
         <View style={styles.buttonContainer}>
-          <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
-            <Text style={styles.saveButtonText}>Save Changes</Text>
+          <TouchableOpacity
+            style={[styles.saveButton, isSaving && styles.buttonDisabled]}
+            onPress={handleSave}
+            disabled={isSaving}
+          >
+            {isSaving ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Text style={styles.saveButtonText}>Save Changes</Text>
+            )}
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.cancelButton}
             onPress={() => router.back()}
+            disabled={isSaving}
           >
             <Text style={styles.cancelButtonText}>Cancel</Text>
           </TouchableOpacity>
@@ -142,6 +159,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   saveButtonText: { color: "#fff", fontSize: 16, fontWeight: "bold" },
+  buttonDisabled: { opacity: 0.6 },
   cancelButton: { padding: 18, alignItems: "center" },
   cancelButtonText: { color: "#666", fontSize: 16 },
 });

@@ -63,6 +63,10 @@ export default function TripDetailsScreen() {
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<any | null>(null);
   const [fieldErrors, setFieldErrors] = useState<EventFieldErrors>({});
+  // Guards the event form against double submission.
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  // Drives the "typing" bubble while the assistant composes a reply.
+  const [isAiTyping, setIsAiTyping] = useState(false);
   const googlePlacesRef = useRef<any>(null);
 
   const handleConfirmTime = (picked: Date) => {
@@ -105,6 +109,9 @@ export default function TripDetailsScreen() {
   };
 
   const handleAddEvent = async () => {
+    // Ignore repeat taps while the first request is still in flight.
+    if (isSubmitting) return;
+
     // A place is only usable once it carries coordinates, which the Google
     // Places autocomplete attaches when a suggestion is actually tapped.
     const hasCoordinates =
@@ -126,6 +133,8 @@ export default function TripDetailsScreen() {
     setFieldErrors(errors);
 
     if (errors.place || errors.activity || errors.time || errors.notes) return;
+
+    setIsSubmitting(true);
 
     const eventData = {
       // Keep the existing ID if we are editing, otherwise generate a new one
@@ -178,6 +187,8 @@ export default function TripDetailsScreen() {
         "Connection problem",
         "Could not reach the server. Check your connection and try again.",
       );
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -221,7 +232,8 @@ export default function TripDetailsScreen() {
   };
 
   const sendMessage = async () => {
-    if (inputText.trim() === "") return;
+    // Also ignore a second send while the assistant is still replying.
+    if (inputText.trim() === "" || isAiTyping) return;
 
     const userMessage = {
       id: Date.now().toString(),
@@ -232,6 +244,7 @@ export default function TripDetailsScreen() {
 
     const currentInput = inputText;
     setInputText("");
+    setIsAiTyping(true);
 
     try {
       const response = await apiFetch("/chat", {
@@ -250,11 +263,13 @@ export default function TripDetailsScreen() {
       setMessages((prev) => [
         ...prev,
         {
-          id: "error",
+          id: `error-${Date.now()}`,
           text: "Sorry, I'm having trouble connecting to the server.",
           isUser: false,
         },
       ]);
+    } finally {
+      setIsAiTyping(false);
     }
   };
   const handleNavigate = (lat: number, lng: number, label: string) => {
@@ -653,17 +668,27 @@ export default function TripDetailsScreen() {
                           setIsModalVisible(false);
                           resetEventForm();
                         }}
+                        disabled={isSubmitting}
                       >
                         <Text style={styles.cancelButtonText}>Cancel</Text>
                       </TouchableOpacity>
 
                       <TouchableOpacity
-                        style={[styles.modalButton, styles.saveButton]}
+                        style={[
+                          styles.modalButton,
+                          styles.saveButton,
+                          isSubmitting && styles.buttonDisabled,
+                        ]}
                         onPress={handleAddEvent}
+                        disabled={isSubmitting}
                       >
-                        <Text style={styles.saveButtonText}>
-                          {editingEventId ? "Save Changes" : "Create"}
-                        </Text>
+                        {isSubmitting ? (
+                          <ActivityIndicator size="small" color="#fff" />
+                        ) : (
+                          <Text style={styles.saveButtonText}>
+                            {editingEventId ? "Save Changes" : "Create"}
+                          </Text>
+                        )}
                       </TouchableOpacity>
                     </View>
                   </View>
@@ -709,6 +734,21 @@ export default function TripDetailsScreen() {
               )}
               keyExtractor={(item) => item.id}
               contentContainerStyle={styles.chatList}
+              // "Typing" bubble sits at the end of the thread while we wait.
+              ListFooterComponent={
+                isAiTyping ? (
+                  <View
+                    style={[
+                      styles.messageBubble,
+                      styles.aiBubble,
+                      styles.typingBubble,
+                    ]}
+                  >
+                    <ActivityIndicator size="small" color="#2f6deb" />
+                    <Text style={styles.typingText}>Traveleria AI is typing…</Text>
+                  </View>
+                ) : null
+              }
             />
 
             <View style={styles.inputContainer}>
@@ -717,8 +757,18 @@ export default function TripDetailsScreen() {
                 placeholder="Ask the AI assistant..."
                 value={inputText}
                 onChangeText={setInputText}
+                editable={!isAiTyping}
+                onSubmitEditing={sendMessage}
+                returnKeyType="send"
               />
-              <TouchableOpacity style={styles.sendButton} onPress={sendMessage}>
+              <TouchableOpacity
+                style={[
+                  styles.sendButton,
+                  (isAiTyping || !inputText.trim()) && styles.buttonDisabled,
+                ]}
+                onPress={sendMessage}
+                disabled={isAiTyping || !inputText.trim()}
+              >
                 <Text style={styles.sendButtonText}>Send</Text>
               </TouchableOpacity>
             </View>
@@ -909,6 +959,9 @@ const styles = StyleSheet.create({
   messageText: { fontSize: 16 },
   userText: { color: "#fff" },
   aiText: { color: "#333" },
+  typingBubble: { flexDirection: "row", alignItems: "center", gap: 8 },
+  typingText: { fontSize: 14, color: "#888", fontStyle: "italic" },
+  buttonDisabled: { opacity: 0.5 },
   inputContainer: {
     flexDirection: "row",
     paddingHorizontal: 15,

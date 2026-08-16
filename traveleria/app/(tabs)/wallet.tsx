@@ -3,6 +3,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
 import React, { useEffect, useState } from "react";
 import {
+    Alert,
     Animated,
     FlatList,
     Image,
@@ -59,7 +60,7 @@ export default function WalletScreen() {
   // Create Document Function
   const handleCreate = async () => {
     if (!newDocTitle.trim()) {
-      alert("Please enter a document name");
+      Alert.alert("Name required", "Please enter a document name.");
       return;
     }
     let result = await DocumentPicker.getDocumentAsync({ type: "*/*" });
@@ -88,7 +89,7 @@ export default function WalletScreen() {
 
   const handleSaveEdit = () => {
     if (!editDocTitle.trim()) {
-      alert("Please enter a document name");
+      Alert.alert("Name required", "Please enter a document name.");
       return;
     }
     saveDocuments(
@@ -102,10 +103,25 @@ export default function WalletScreen() {
     setEditingDoc(null);
   };
 
+  // Deleting a document cannot be undone, so confirm first — matching the
+  // confirmation the itinerary already uses before removing an event.
   const handleDelete = () => {
-    saveDocuments(documents.filter((doc) => doc.id !== editingDoc.id));
-    setEditModalVisible(false);
-    setEditingDoc(null);
+    Alert.alert(
+      "Delete Document",
+      `Remove "${editingDoc?.title}" from your wallet? This cannot be undone.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => {
+            saveDocuments(documents.filter((doc) => doc.id !== editingDoc.id));
+            setEditModalVisible(false);
+            setEditingDoc(null);
+          },
+        },
+      ],
+    );
   };
 
   // Render each document card
@@ -152,6 +168,15 @@ export default function WalletScreen() {
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
+        ListEmptyComponent={
+          <View style={styles.emptyState}>
+            <Ionicons name="card-outline" size={52} color="#c7d0da" />
+            <Text style={styles.emptyText}>No documents yet</Text>
+            <Text style={styles.emptySubText}>
+              Tap + to add a boarding pass, ticket or booking.
+            </Text>
+          </View>
+        }
       />
 
       {/* --- Add Document Modal --- */}
@@ -307,7 +332,20 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: 34, fontWeight: "bold", color: "#1a1a1a" },
   addButton: { backgroundColor: "#f2f2f7", borderRadius: 20, padding: 5 },
-  listContent: { paddingHorizontal: 20, paddingBottom: 100 },
+  listContent: { paddingHorizontal: 20, paddingBottom: 100, flexGrow: 1 },
+  emptyState: { alignItems: "center", marginTop: 60 },
+  emptyText: {
+    fontSize: 17,
+    fontWeight: "bold",
+    color: "#8a97a5",
+    marginTop: 12,
+  },
+  emptySubText: {
+    fontSize: 14,
+    color: "#aab4bf",
+    marginTop: 4,
+    textAlign: "center",
+  },
 
   // Wallet Card Styles
   card: {

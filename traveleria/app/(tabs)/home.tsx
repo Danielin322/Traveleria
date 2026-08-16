@@ -1,8 +1,13 @@
-import { useEffect, useState } from "react";
+import { Ionicons } from "@expo/vector-icons";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  FlatList,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
+  RefreshControl,
+  ScrollView,
+  SectionList,
   StyleSheet,
   Text,
   TextInput,
@@ -14,6 +19,12 @@ import { useRouter } from "expo-router";
 import DateTimePickerModal from "react-native-modal-datetime-picker";
 import { API_URL } from "../../constants/api";
 import { apiFetch } from "../../services/apiClient";
+import {
+  formatTripBadge,
+  formatTripDates,
+  getTripStatus,
+  groupTripsByTime,
+} from "../../utils/tripFormat";
 import {
   LIMITS,
   formatDate,
@@ -31,8 +42,9 @@ type TripFieldErrors = {
 };
 
 export default function HomeScreen() {
-  const [trips, setTrips] = useState([]);
+  const [trips, setTrips] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const router = useRouter();
@@ -46,6 +58,17 @@ export default function HomeScreen() {
   const [isEndPickerVisible, setEndPickerVisible] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<TripFieldErrors>({});
   const [addError, setAddError] = useState<string | null>(null);
+  // Guards against a double tap creating the same trip twice.
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Upcoming trips first (soonest at the top), past trips below.
+  const sections = useMemo(() => {
+    const { upcoming, past } = groupTripsByTime(trips);
+    return [
+      ...(upcoming.length ? [{ title: "Upcoming", data: upcoming }] : []),
+      ...(past.length ? [{ title: "Past", data: past }] : []),
+    ];
+  }, [trips]);
 
   const fetchTrips = async () => {
     if (!API_URL) {
@@ -64,6 +87,13 @@ export default function HomeScreen() {
     } finally {
       setLoading(false);
     }
+  };
+
+  /** Pull-to-refresh: reuses fetchTrips but drives the spinner in the list. */
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await fetchTrips();
+    setRefreshing(false);
   };
 
   const resetTripForm = () => {
@@ -96,6 +126,9 @@ export default function HomeScreen() {
   };
 
   const handleAddTrip = async () => {
+    // Ignore repeat taps while the first request is still in flight.
+    if (isSubmitting) return;
+
     setAddError(null);
 
     const errors: TripFieldErrors = {
@@ -108,6 +141,7 @@ export default function HomeScreen() {
     // Bail out if any rule failed; the messages are already on screen.
     if (errors.title || errors.location || errors.dates) return;
 
+    setIsSubmitting(true);
     try {
       const response = await apiFetch("/trips", {
         method: "POST",
@@ -131,6 +165,8 @@ export default function HomeScreen() {
     } catch (err) {
       setAddError("Could not connect to server.");
       console.error("Error adding trip:", err);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -138,29 +174,54 @@ export default function HomeScreen() {
     fetchTrips();
   }, []);
 
-  const renderTripItem = ({ item }: { item: any }) => (
-    <TouchableOpacity
-      style={styles.tripCard}
-      onPress={() =>
-        router.push({
-          pathname: "/trip-details",
-          params: {
-            id: item.id,
-            title: item.title,
-            location: item.location,
-            date: item.date,
-          },
-        })
-      }
-    >
-      <View style={styles.tripInfo}>
-        <Text style={styles.locationText}>{item.location}</Text>
-        <Text style={styles.tripTitle}>{item.title}</Text>
-        <Text style={styles.dateText}>{item.date}</Text>
-      </View>
-      <Text style={styles.viewLink}>View {">"}</Text>
-    </TouchableOpacity>
-  );
+  const renderTripItem = ({ item }: { item: any }) => {
+    const status = getTripStatus(item.date);
+    const badge = formatTripBadge(status);
+    const isPast = status?.kind === "past";
+
+    return (
+      <TouchableOpacity
+        style={[styles.tripCard, isPast && styles.tripCardPast]}
+        onPress={() =>
+          router.push({
+            pathname: "/trip-details",
+            params: {
+              id: item.id,
+              title: item.title,
+              location: item.location,
+              date: item.date,
+            },
+          })
+        }
+      >
+        <View style={styles.tripInfo}>
+          <View style={styles.tripCardTopRow}>
+            <Text style={styles.locationText}>{item.location}</Text>
+            {badge && (
+              <View
+                style={[
+                  styles.badge,
+                  status?.kind === "ongoing" && styles.badgeOngoing,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.badgeText,
+                    status?.kind === "ongoing" && styles.badgeTextOngoing,
+                  ]}
+                >
+                  {badge}
+                </Text>
+              </View>
+            )}
+          </View>
+          <Text style={styles.tripTitle}>{item.title}</Text>
+          <Text style={styles.dateText}>{formatTripDates(item.date)}</Text>
+        </View>
+        <Text style={styles.viewLink}>View {">"}</Text>
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <View style={styles.container}>
@@ -177,125 +238,145 @@ export default function HomeScreen() {
       </TouchableOpacity>
 
       <Modal visible={isModalVisible} animationType="slide" transparent={true}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>New Journey</Text>
+        {/* Keeps the Create button reachable once the keyboard is up. */}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={styles.modalOverlay}
+        >
+          <ScrollView
+            contentContainerStyle={styles.modalScrollContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>New Journey</Text>
 
-            <Text style={styles.inputLabel}>Trip Title</Text>
-            <TextInput
-              style={[styles.input, fieldErrors.title && styles.inputError]}
-              placeholder="e.g. Summer in Italy"
-              value={newTitle}
-              onChangeText={(text) => {
-                setNewTitle(text);
-                if (fieldErrors.title)
-                  setFieldErrors((prev) => ({ ...prev, title: undefined }));
-              }}
-              maxLength={LIMITS.tripTitle.max}
-            />
-            {fieldErrors.title && (
-              <Text style={styles.fieldErrorText}>{fieldErrors.title}</Text>
-            )}
+              <Text style={styles.inputLabel}>Trip Title</Text>
+              <TextInput
+                style={[styles.input, fieldErrors.title && styles.inputError]}
+                placeholder="e.g. Summer in Italy"
+                value={newTitle}
+                onChangeText={(text) => {
+                  setNewTitle(text);
+                  if (fieldErrors.title)
+                    setFieldErrors((prev) => ({ ...prev, title: undefined }));
+                }}
+                maxLength={LIMITS.tripTitle.max}
+              />
+              {fieldErrors.title && (
+                <Text style={styles.fieldErrorText}>{fieldErrors.title}</Text>
+              )}
 
-            <Text style={styles.inputLabel}>Destination</Text>
-            <TextInput
-              style={[styles.input, fieldErrors.location && styles.inputError]}
-              placeholder="e.g. Rome"
-              value={newLocation}
-              onChangeText={(text) => {
-                setNewLocation(text);
-                if (fieldErrors.location)
-                  setFieldErrors((prev) => ({ ...prev, location: undefined }));
-              }}
-              maxLength={LIMITS.destination.max}
-            />
-            {fieldErrors.location && (
-              <Text style={styles.fieldErrorText}>{fieldErrors.location}</Text>
-            )}
+              <Text style={styles.inputLabel}>Destination</Text>
+              <TextInput
+                style={[styles.input, fieldErrors.location && styles.inputError]}
+                placeholder="e.g. Rome"
+                value={newLocation}
+                onChangeText={(text) => {
+                  setNewLocation(text);
+                  if (fieldErrors.location)
+                    setFieldErrors((prev) => ({ ...prev, location: undefined }));
+                }}
+                maxLength={LIMITS.destination.max}
+              />
+              {fieldErrors.location && (
+                <Text style={styles.fieldErrorText}>{fieldErrors.location}</Text>
+              )}
 
-            <Text style={styles.inputLabel}>Dates</Text>
-            <View style={styles.dateRow}>
-              <TouchableOpacity
-                style={[
-                  styles.input,
-                  styles.dateInput,
-                  fieldErrors.dates && styles.inputError,
-                ]}
-                onPress={() => setStartPickerVisible(true)}
-                accessibilityRole="button"
-                accessibilityLabel="Choose start date"
-              >
-                <Text
-                  style={
-                    startDate ? styles.dateValueText : styles.datePlaceholder
-                  }
+              <Text style={styles.inputLabel}>Dates</Text>
+              <View style={styles.dateRow}>
+                <TouchableOpacity
+                  style={[
+                    styles.input,
+                    styles.dateInput,
+                    fieldErrors.dates && styles.inputError,
+                  ]}
+                  onPress={() => setStartPickerVisible(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Choose start date"
                 >
-                  {startDate ? formatDate(startDate) : "Start date"}
-                </Text>
-              </TouchableOpacity>
+                  <Text
+                    style={
+                      startDate ? styles.dateValueText : styles.datePlaceholder
+                    }
+                  >
+                    {startDate ? formatDate(startDate) : "Start date"}
+                  </Text>
+                </TouchableOpacity>
 
-              <Text style={styles.dateSeparator}>–</Text>
+                <Text style={styles.dateSeparator}>–</Text>
 
-              <TouchableOpacity
-                style={[
-                  styles.input,
-                  styles.dateInput,
-                  fieldErrors.dates && styles.inputError,
-                ]}
-                onPress={() => setEndPickerVisible(true)}
-                accessibilityRole="button"
-                accessibilityLabel="Choose end date"
-              >
-                <Text
-                  style={
-                    endDate ? styles.dateValueText : styles.datePlaceholder
-                  }
+                <TouchableOpacity
+                  style={[
+                    styles.input,
+                    styles.dateInput,
+                    fieldErrors.dates && styles.inputError,
+                  ]}
+                  onPress={() => setEndPickerVisible(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Choose end date"
                 >
-                  {endDate ? formatDate(endDate) : "End date"}
-                </Text>
-              </TouchableOpacity>
-            </View>
-            {fieldErrors.dates && (
-              <Text style={styles.fieldErrorText}>{fieldErrors.dates}</Text>
-            )}
+                  <Text
+                    style={
+                      endDate ? styles.dateValueText : styles.datePlaceholder
+                    }
+                  >
+                    {endDate ? formatDate(endDate) : "End date"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+              {fieldErrors.dates && (
+                <Text style={styles.fieldErrorText}>{fieldErrors.dates}</Text>
+              )}
 
-            {/* Native scroll-wheel pickers */}
-            <DateTimePickerModal
-              isVisible={isStartPickerVisible}
-              mode="date"
-              display="spinner"
-              date={startDate ?? new Date()}
-              onConfirm={handleConfirmStartDate}
-              onCancel={() => setStartPickerVisible(false)}
-            />
-            <DateTimePickerModal
-              isVisible={isEndPickerVisible}
-              mode="date"
-              display="spinner"
-              date={endDate ?? startDate ?? new Date()}
-              // The trip cannot end before it starts.
-              minimumDate={startDate ?? undefined}
-              onConfirm={handleConfirmEndDate}
-              onCancel={() => setEndPickerVisible(false)}
-            />
+              {/* Native scroll-wheel pickers */}
+              <DateTimePickerModal
+                isVisible={isStartPickerVisible}
+                mode="date"
+                display="spinner"
+                date={startDate ?? new Date()}
+                onConfirm={handleConfirmStartDate}
+                onCancel={() => setStartPickerVisible(false)}
+              />
+              <DateTimePickerModal
+                isVisible={isEndPickerVisible}
+                mode="date"
+                display="spinner"
+                date={endDate ?? startDate ?? new Date()}
+                // The trip cannot end before it starts.
+                minimumDate={startDate ?? undefined}
+                onConfirm={handleConfirmEndDate}
+                onCancel={() => setEndPickerVisible(false)}
+              />
 
-            {addError && <Text style={styles.addErrorText}>{addError}</Text>}
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={closeTripModal}
-              >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.saveButton]}
-                onPress={handleAddTrip}
-              >
-                <Text style={styles.saveButtonText}>Create</Text>
-              </TouchableOpacity>
+              {addError && <Text style={styles.addErrorText}>{addError}</Text>}
+              <View style={styles.modalButtons}>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.cancelButton]}
+                  onPress={closeTripModal}
+                  disabled={isSubmitting}
+                >
+                  <Text style={styles.cancelButtonText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.modalButton,
+                    styles.saveButton,
+                    isSubmitting && styles.buttonDisabled,
+                  ]}
+                  onPress={handleAddTrip}
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={styles.saveButtonText}>Create</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
             </View>
-          </View>
-        </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </Modal>
 
       {loading ? (
@@ -308,11 +389,35 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </View>
       ) : (
-        <FlatList
-          data={trips}
+        <SectionList
+          sections={sections}
           renderItem={renderTripItem}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContainer}
+          // Only worth showing a heading once trips actually split into groups.
+          renderSectionHeader={({ section }) =>
+            sections.length > 1 ? (
+              <Text style={styles.sectionHeader}>{section.title}</Text>
+            ) : null
+          }
+          stickySectionHeadersEnabled={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              colors={["#2f6deb"]}
+              tintColor="#2f6deb"
+            />
+          }
+          ListEmptyComponent={
+            <View style={styles.emptyState}>
+              <Ionicons name="airplane-outline" size={52} color="#c7d0da" />
+              <Text style={styles.emptyText}>No trips yet</Text>
+              <Text style={styles.emptySubText}>
+                Tap “+ Plan Trip” to start your first journey.
+              </Text>
+            </View>
+          }
         />
       )}
     </View>
@@ -350,20 +455,54 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
   },
+  // Past trips recede so upcoming ones read as the active content.
+  tripCardPast: { opacity: 0.65 },
   tripInfo: { flex: 1 },
+  tripCardTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 4,
+  },
   locationText: {
     fontSize: 12,
     color: "#1E90FF",
     fontWeight: "bold",
-    marginBottom: 4,
   },
+  badge: {
+    backgroundColor: "#eef2ff",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    marginLeft: 8,
+  },
+  badgeText: { fontSize: 11, fontWeight: "bold", color: "#2f6deb" },
+  badgeOngoing: { backgroundColor: "#e6f7ed" },
+  badgeTextOngoing: { color: "#1a9e5c" },
+  sectionHeader: {
+    fontSize: 13,
+    fontWeight: "bold",
+    color: "#888",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 10,
+    marginTop: 6,
+  },
+  emptyState: { alignItems: "center", marginTop: 50 },
+  emptyText: { fontSize: 17, fontWeight: "bold", color: "#8a97a5", marginTop: 12 },
+  emptySubText: { fontSize: 14, color: "#aab4bf", marginTop: 4, textAlign: "center" },
+  buttonDisabled: { opacity: 0.6 },
   tripTitle: { fontSize: 18, fontWeight: "bold", color: "#333" },
   dateText: { fontSize: 14, color: "#888", marginTop: 4 },
   viewLink: { color: "#2f6deb", fontWeight: "bold" },
   modalOverlay: {
     flex: 1,
-    justifyContent: "center",
     backgroundColor: "rgba(0,0,0,0.5)",
+  },
+  // justifyContent here (not on the overlay) so the sheet stays centred
+  // while still being able to scroll when the keyboard shrinks the space.
+  modalScrollContent: {
+    flexGrow: 1,
+    justifyContent: "center",
     padding: 20,
   },
   modalContent: {

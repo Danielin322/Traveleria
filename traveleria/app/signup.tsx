@@ -3,6 +3,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   Platform,
   SafeAreaView,
@@ -38,6 +39,9 @@ export default function SignupScreen() {
   // State to track registration success
   const [isRegistered, setIsRegistered] = useState(false);
 
+  // Blocks repeat taps while a Cognito request is in flight.
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   // Helper function to validate email format using regex
   const isValidEmail = (email: string) => {
     // Standard email pattern
@@ -54,6 +58,8 @@ export default function SignupScreen() {
   };
 
   const handleSignup = async () => {
+    if (isSubmitting) return;
+
     // 1. Basic empty fields check
     if (!firstName || !email || !password) {
       Alert.alert("Missing Information", "All fields are required.");
@@ -78,31 +84,40 @@ export default function SignupScreen() {
       return;
     }
 
-    const result = await registerUser({ email, password, firstName });
+    setIsSubmitting(true);
+    try {
+      const result = await registerUser({ email, password, firstName });
 
-    if (result.success) {
-      setIsRegistered(true);
-    } else {
-      // 4. Handle specific AWS error codes for better English messages
-      const error = result.error as any;
-      let errorMessage = "An unexpected error occurred. Please try again.";
+      if (result.success) {
+        setIsRegistered(true);
+      } else {
+        // 4. Handle specific AWS error codes for better English messages
+        const error = result.error as any;
+        let errorMessage = "An unexpected error occurred. Please try again.";
 
-      // Mapping AWS Cognito error names to user-friendly English messages
-      if (error.name === "UsernameExistsException") {
-        errorMessage =
-          "This email is already registered. Please try logging in.";
-      } else if (error.name === "InvalidPasswordException") {
-        errorMessage = "The password does not meet the security requirements.";
-      } else if (error.name === "LimitExceededException") {
-        errorMessage = "Too many attempts. Please wait a moment and try again.";
+        // Mapping AWS Cognito error names to user-friendly English messages
+        if (error.name === "UsernameExistsException") {
+          errorMessage =
+            "This email is already registered. Please try logging in.";
+        } else if (error.name === "InvalidPasswordException") {
+          errorMessage =
+            "The password does not meet the security requirements.";
+        } else if (error.name === "LimitExceededException") {
+          errorMessage =
+            "Too many attempts. Please wait a moment and try again.";
+        }
+
+        Alert.alert("Registration Failed", errorMessage);
       }
-
-      Alert.alert("Registration Failed", errorMessage);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   // Function to handle the confirmation code verification
   const handleVerify = async () => {
+    if (isSubmitting) return;
+
     if (!verificationCode) {
       Alert.alert(
         "Missing Code",
@@ -111,17 +126,26 @@ export default function SignupScreen() {
       return;
     }
 
-    const result = await confirmUser(email, verificationCode);
+    setIsSubmitting(true);
+    try {
+      const result = await confirmUser(email, verificationCode);
 
-    if (result.success) {
-      Alert.alert("Success!", "Your account is now verified. You can log in.", [
-        { text: "OK", onPress: () => router.replace("/") }, // Navigate back to the login screen
-      ]);
-    } else {
-      Alert.alert(
-        "Verification Failed",
-        (result.error as Error)?.message || "Invalid code.",
-      );
+      if (result.success) {
+        Alert.alert(
+          "Success!",
+          "Your account is now verified. You can log in.",
+          [
+            { text: "OK", onPress: () => router.replace("/") }, // Navigate back to the login screen
+          ],
+        );
+      } else {
+        Alert.alert(
+          "Verification Failed",
+          (result.error as Error)?.message || "Invalid code.",
+        );
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -162,8 +186,16 @@ export default function SignupScreen() {
             maxLength={6} // Limits input to 6 characters
           />
 
-          <TouchableOpacity style={styles.button} onPress={handleVerify}>
-            <Text style={styles.buttonText}>Verify Account</Text>
+          <TouchableOpacity
+            style={[styles.button, isSubmitting && styles.buttonDisabled]}
+            onPress={handleVerify}
+            disabled={isSubmitting}
+          >
+            {isSubmitting ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Text style={styles.buttonText}>Verify Account</Text>
+            )}
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -212,8 +244,16 @@ export default function SignupScreen() {
           secureTextEntry={true}
         />
 
-        <TouchableOpacity style={styles.button} onPress={handleSignup}>
-          <Text style={styles.buttonText}>Create Account</Text>
+        <TouchableOpacity
+          style={[styles.button, isSubmitting && styles.buttonDisabled]}
+          onPress={handleSignup}
+          disabled={isSubmitting}
+        >
+          {isSubmitting ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <Text style={styles.buttonText}>Create Account</Text>
+          )}
         </TouchableOpacity>
       </View>
     </SafeAreaView>
@@ -284,4 +324,5 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "600",
   },
+  buttonDisabled: { opacity: 0.6 },
 });

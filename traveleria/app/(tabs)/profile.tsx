@@ -4,8 +4,10 @@ import { useFocusEffect, useRouter } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   Image,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -21,6 +23,10 @@ export default function ProfileScreen() {
   const router = useRouter();
 
   const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   const [userData, setUserData] = useState({
     fullName: "",
@@ -33,7 +39,9 @@ export default function ProfileScreen() {
 
   const fetchProfile = async () => {
     try {
+      setError(null);
       const response = await apiFetch("/users/me");
+      if (!response.ok) throw new Error(`Request failed (${response.status})`);
       const data = await response.json();
       setUserData({
         fullName: data.full_name || "",
@@ -44,8 +52,18 @@ export default function ProfileScreen() {
         interests: data.interests ? data.interests.split(",").map((i: string) => i.trim()) : [],
       });
     } catch (err) {
+      // Previously swallowed, which left the screen looking blank but fine.
+      setError("Could not load your profile. Pull down or tap retry.");
       console.error("Error fetching profile:", err);
+    } finally {
+      setLoading(false);
     }
+  };
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await fetchProfile();
+    setRefreshing(false);
   };
 
   useFocusEffect(useCallback(() => {
@@ -85,17 +103,57 @@ export default function ProfileScreen() {
     });
   };
 
-  const handleLogout = async () => {
-    const result = await signOutUser();
-    if (result.success) {
-      router.replace("/");
-    } else {
-      Alert.alert("Logout Failed", "Please try again.");
+  const performLogout = async () => {
+    if (isLoggingOut) return;
+    setIsLoggingOut(true);
+    try {
+      const result = await signOutUser();
+      if (result.success) {
+        router.replace("/");
+      } else {
+        Alert.alert("Logout Failed", "Please try again.");
+      }
+    } finally {
+      setIsLoggingOut(false);
     }
   };
 
+  // Logging out is disruptive enough to be worth a confirmation step.
+  const handleLogout = () => {
+    Alert.alert("Log out", "Are you sure you want to log out?", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Log Out", style: "destructive", onPress: performLogout },
+    ]);
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.centeredState}>
+        <ActivityIndicator size="large" color="#2f6deb" />
+      </View>
+    );
+  }
+
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView
+      style={styles.container}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={handleRefresh}
+          colors={["#2f6deb"]}
+          tintColor="#2f6deb"
+        />
+      }
+    >
+      {error && (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorBannerText}>{error}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={fetchProfile}>
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      )}
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.editTopButton}
@@ -117,7 +175,9 @@ export default function ProfileScreen() {
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.nameText}>{userData.fullName}</Text>
+        <Text style={styles.nameText}>
+          {userData.fullName || "Your name"}
+        </Text>
       </View>
 
       <View style={styles.statsContainer}>
@@ -133,21 +193,33 @@ export default function ProfileScreen() {
           <Ionicons name="flag-outline" size={22} color="#2f6deb" />
           <View style={styles.infoTextContainer}>
             <Text style={styles.infoLabel}>Country</Text>
-            <Text style={styles.infoValue}>{userData.country}</Text>
+            <Text
+              style={[styles.infoValue, !userData.country && styles.infoValueEmpty]}
+            >
+              {userData.country || "Not set"}
+            </Text>
           </View>
         </View>
         <View style={styles.infoItem}>
           <Ionicons name="language-outline" size={22} color="#2f6deb" />
           <View style={styles.infoTextContainer}>
             <Text style={styles.infoLabel}>Languages</Text>
-            <Text style={styles.infoValue}>{userData.language}</Text>
+            <Text
+              style={[styles.infoValue, !userData.language && styles.infoValueEmpty]}
+            >
+              {userData.language || "Not set"}
+            </Text>
           </View>
         </View>
         <View style={styles.infoItem}>
           <Ionicons name="calendar-outline" size={22} color="#2f6deb" />
           <View style={styles.infoTextContainer}>
             <Text style={styles.infoLabel}>Age</Text>
-            <Text style={styles.infoValue}>{userData.age}</Text>
+            <Text
+              style={[styles.infoValue, !userData.age && styles.infoValueEmpty]}
+            >
+              {userData.age || "Not set"}
+            </Text>
           </View>
         </View>
       </View>
@@ -155,19 +227,35 @@ export default function ProfileScreen() {
       <View style={styles.interestsSection}>
         <Text style={styles.sectionTitle}>Interests</Text>
         <View style={styles.interestsGrid}>
-          {userData.interests.map((interest, index) =>
-            interest ? (
-              <View key={index} style={styles.interestTag}>
-                <Text style={styles.interestText}>{interest}</Text>
-              </View>
-            ) : null,
+          {userData.interests.filter(Boolean).length > 0 ? (
+            userData.interests.map((interest, index) =>
+              interest ? (
+                <View key={index} style={styles.interestTag}>
+                  <Text style={styles.interestText}>{interest}</Text>
+                </View>
+              ) : null,
+            )
+          ) : (
+            <Text style={styles.interestsEmpty}>
+              No interests yet — tap Edit to add some.
+            </Text>
           )}
         </View>
       </View>
 
-      <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-        <Ionicons name="log-out-outline" size={20} color="#ff4d4d" />
-        <Text style={styles.logoutText}>Log Out</Text>
+      <TouchableOpacity
+        style={[styles.logoutButton, isLoggingOut && styles.buttonDisabled]}
+        onPress={handleLogout}
+        disabled={isLoggingOut}
+      >
+        {isLoggingOut ? (
+          <ActivityIndicator size="small" color="#ff4d4d" />
+        ) : (
+          <>
+            <Ionicons name="log-out-outline" size={20} color="#ff4d4d" />
+            <Text style={styles.logoutText}>Log Out</Text>
+          </>
+        )}
       </TouchableOpacity>
     </ScrollView>
   );
@@ -175,6 +263,31 @@ export default function ProfileScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#f8f9fa" },
+  centeredState: {
+    flex: 1,
+    backgroundColor: "#f8f9fa",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  errorBanner: {
+    backgroundColor: "#fdecea",
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  errorBannerText: { color: "#c0392b", fontSize: 13, flex: 1, marginRight: 12 },
+  retryButton: {
+    backgroundColor: "#2f6deb",
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  retryButtonText: { color: "#fff", fontWeight: "bold", fontSize: 13 },
+  infoValueEmpty: { color: "#aab4bf", fontWeight: "400" },
+  interestsEmpty: { color: "#aab4bf", fontSize: 14 },
+  buttonDisabled: { opacity: 0.6 },
   header: {
     alignItems: "center",
     paddingTop: 60,
