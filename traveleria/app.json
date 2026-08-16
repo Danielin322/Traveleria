@@ -35,7 +35,7 @@
             "backgroundColor": "#000000"
           }
         }
-      ],
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
@@ -44,15 +44,15 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "be25772c-0783-459f-a7ec-cfdc026945da"
+        "projectId": "15cb608e-ab6a-480b-aa8a-34ef492d663a"
       }
     },
-    "owner": "shirelbar80",
+    "owner": "hadarf",
     "runtimeVersion": {
       "policy": "sdkVersion"
     },
     "updates": {
-      "url": "https://u.expo.dev/be25772c-0783-459f-a7ec-cfdc026945da"
+      "url": "https://u.expo.dev/15cb608e-ab6a-480b-aa8a-34ef492d663a"
     }
   }
 }
