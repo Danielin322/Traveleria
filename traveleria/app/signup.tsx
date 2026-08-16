@@ -1,8 +1,12 @@
 // 1. Imports
+import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useState } from "react";
 import {
   Alert,
+  Platform,
+  SafeAreaView,
+  StatusBar,
   StyleSheet,
   Text,
   TextInput,
@@ -15,6 +19,16 @@ import { confirmUser, registerUser } from "../services/authService";
 
 export default function SignupScreen() {
   const router = useRouter();
+
+  // Return to the login screen. Falls back to a direct navigation when there is
+  // no history to pop — e.g. if signup was opened as the app's first screen.
+  const goBackToLogin = () => {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace("/");
+    }
+  };
   const [verificationCode, setVerificationCode] = useState("");
   // State for form inputs
   const [firstName, setFirstName] = useState("");
@@ -111,79 +125,124 @@ export default function SignupScreen() {
     }
   };
 
+  // Shared back affordance. The root Stack hides headers, so the screen
+  // provides its own way back to login.
+  const renderBackBar = () => (
+    <View style={styles.headerBar}>
+      <TouchableOpacity
+        style={styles.backButton}
+        onPress={goBackToLogin}
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        accessibilityRole="button"
+        accessibilityLabel="Back to log in"
+      >
+        <Ionicons name="chevron-back" size={26} color="#2063e0" />
+        <Text style={styles.backButtonText}>Log In</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
   if (isRegistered) {
     return (
-      <View style={styles.container}>
-        <Text style={styles.title}>Confirm Your Account</Text>
-        <Text style={styles.message}>
-          We sent a 6-digit code to {email}. Please enter it below to activate
-          your account.
-        </Text>
-
-        <TextInput
-          style={styles.input}
-          placeholder="6-Digit Code"
-          value={verificationCode}
-          onChangeText={setVerificationCode}
-          keyboardType="number-pad" // Opens numeric keyboard on the phone
-          maxLength={6} // Limits input to 6 characters
-        />
-
-        <TouchableOpacity style={styles.button} onPress={handleVerify}>
-          <Text style={styles.buttonText}>Verify Account</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[
-            styles.button,
-            { backgroundColor: "transparent", marginTop: 15 },
-          ]}
-          onPress={() => router.back()}
-        >
-          <Text style={[styles.buttonText, { color: "#007AFF" }]}>
-            Cancel and Go Back
+      <SafeAreaView style={styles.safeArea}>
+        {renderBackBar()}
+        <View style={styles.container}>
+          <Text style={styles.title}>Confirm Your Account</Text>
+          <Text style={styles.message}>
+            We sent a 6-digit code to {email}. Please enter it below to activate
+            your account.
           </Text>
-        </TouchableOpacity>
-      </View>
+
+          <TextInput
+            style={styles.input}
+            placeholder="6-Digit Code"
+            value={verificationCode}
+            onChangeText={setVerificationCode}
+            keyboardType="number-pad" // Opens numeric keyboard on the phone
+            maxLength={6} // Limits input to 6 characters
+          />
+
+          <TouchableOpacity style={styles.button} onPress={handleVerify}>
+            <Text style={styles.buttonText}>Verify Account</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.button,
+              { backgroundColor: "transparent", marginTop: 15 },
+            ]}
+            onPress={goBackToLogin}
+          >
+            <Text style={[styles.buttonText, { color: "#007AFF" }]}>
+              Cancel and Go Back
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Sign Up</Text>
+    <SafeAreaView style={styles.safeArea}>
+      {renderBackBar()}
+      <View style={styles.container}>
+        <Text style={styles.title}>Sign Up</Text>
 
-      <TextInput
-        style={styles.input}
-        placeholder="First Name"
-        value={firstName}
-        onChangeText={setFirstName}
-      />
+        <TextInput
+          style={styles.input}
+          placeholder="First Name"
+          value={firstName}
+          onChangeText={setFirstName}
+        />
 
-      <TextInput
-        style={styles.input}
-        placeholder="Email"
-        value={email}
-        onChangeText={setEmail}
-        keyboardType="email-address"
-        autoCapitalize="none"
-      />
+        <TextInput
+          style={styles.input}
+          placeholder="Email"
+          value={email}
+          onChangeText={setEmail}
+          keyboardType="email-address"
+          autoCapitalize="none"
+        />
 
-      <TextInput
-        style={styles.input}
-        placeholder="Password"
-        value={password}
-        onChangeText={setPassword}
-        secureTextEntry={true}
-      />
+        <TextInput
+          style={styles.input}
+          placeholder="Password"
+          value={password}
+          onChangeText={setPassword}
+          secureTextEntry={true}
+        />
 
-      <TouchableOpacity style={styles.button} onPress={handleSignup}>
-        <Text style={styles.buttonText}>Create Account</Text>
-      </TouchableOpacity>
-    </View>
+        <TouchableOpacity style={styles.button} onPress={handleSignup}>
+          <Text style={styles.buttonText}>Create Account</Text>
+        </TouchableOpacity>
+      </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: "#ffffff" },
+  headerBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    // SafeAreaView only insets on iOS, so clear Android's status bar manually.
+    paddingTop:
+      Platform.OS === "android" ? (StatusBar.currentHeight ?? 0) + 8 : 8,
+  },
+  backButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 6,
+    paddingRight: 12,
+  },
+  backButtonText: {
+    color: "#2063e0",
+    fontSize: 17,
+    fontWeight: "600",
+    marginLeft: -4,
+  },
   container: {
     flex: 1,
     justifyContent: "center",

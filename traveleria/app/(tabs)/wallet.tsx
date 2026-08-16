@@ -14,6 +14,7 @@ import {
     View,
 } from "react-native";
 import { WebView } from "react-native-webview";
+import { StatusBar } from "expo-status-bar";
 
 // Apple Wallet style colors
 const APPLE_COLORS = [
@@ -133,6 +134,8 @@ export default function WalletScreen() {
 
   return (
     <View style={styles.container}>
+      {/* Dark status bar content, now that the screen is white. */}
+      <StatusBar style="dark" />
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Wallet</Text>
         <TouchableOpacity
@@ -244,7 +247,7 @@ export default function WalletScreen() {
               <Ionicons
                 name="trash-outline"
                 size={20}
-                color="#ff453a"
+                color="#ff3b30"
                 style={{ marginRight: 8 }}
               />
               <Text style={styles.deleteBtnFullText}>Delete Document</Text>
@@ -257,9 +260,15 @@ export default function WalletScreen() {
       <Modal visible={!!selectedDoc} transparent animationType="fade">
         <View style={styles.viewModalOverlay}>
           <View style={styles.viewModalHeader}>
-            <Text style={styles.viewModalTitle}>{selectedDoc?.title}</Text>
-            <TouchableOpacity onPress={() => setSelectedDoc(null)}>
-              <Ionicons name="close-circle" size={36} color="#fff" />
+            <Text style={styles.viewModalTitle} numberOfLines={1}>
+              {selectedDoc?.title}
+            </Text>
+            <TouchableOpacity
+              onPress={() => setSelectedDoc(null)}
+              accessibilityRole="button"
+              accessibilityLabel="Close document"
+            >
+              <Ionicons name="close-circle" size={36} color="#8e8e93" />
             </TouchableOpacity>
           </View>
           <View style={styles.documentContainer}>
@@ -287,7 +296,7 @@ export default function WalletScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#000" },
+  container: { flex: 1, backgroundColor: "#fff" },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -296,8 +305,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     marginBottom: 20,
   },
-  headerTitle: { fontSize: 34, fontWeight: "bold", color: "#fff" },
-  addButton: { backgroundColor: "#1c1c1e", borderRadius: 20, padding: 5 },
+  headerTitle: { fontSize: 34, fontWeight: "bold", color: "#1a1a1a" },
+  addButton: { backgroundColor: "#f2f2f7", borderRadius: 20, padding: 5 },
   listContent: { paddingHorizontal: 20, paddingBottom: 100 },
 
   // Wallet Card Styles
@@ -337,28 +346,34 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     width: "85%",
-    backgroundColor: "#1c1c1e",
+    backgroundColor: "#fff",
     borderRadius: 20,
     padding: 25,
     alignItems: "center",
+    // Lifts the sheet off the dimmed backdrop now that both are light.
+    elevation: 5,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
   },
   modalTitle: {
-    color: "#fff",
+    color: "#1a1a1a",
     fontSize: 22,
     fontWeight: "bold",
     marginBottom: 20,
   },
   input: {
     width: "100%",
-    backgroundColor: "#2c2c2e",
-    color: "#fff",
+    backgroundColor: "#f2f2f7",
+    color: "#1a1a1a",
     padding: 15,
     borderRadius: 10,
     fontSize: 16,
     marginBottom: 20,
   },
   colorLabel: {
-    color: "#fff",
+    color: "#1a1a1a",
     alignSelf: "flex-start",
     marginBottom: 10,
     fontSize: 16,
@@ -376,7 +391,8 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: "transparent",
   },
-  selectedColorCircle: { borderColor: "#fff" },
+  // Dark ring so the active swatch is visible against the white sheet.
+  selectedColorCircle: { borderColor: "#1a1a1a" },
   modalButtons: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -387,10 +403,10 @@ const styles = StyleSheet.create({
     padding: 15,
     alignItems: "center",
     borderRadius: 10,
-    backgroundColor: "#3a3a3c",
+    backgroundColor: "#e5e5ea",
     marginRight: 10,
   },
-  cancelBtnText: { color: "#ff453a", fontSize: 16, fontWeight: "bold" },
+  cancelBtnText: { color: "#ff3b30", fontSize: 16, fontWeight: "bold" },
   createBtn: {
     flex: 1,
     padding: 15,
@@ -406,16 +422,16 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     marginTop: 20,
     padding: 15,
-    backgroundColor: "rgba(255, 69, 58, 0.15)",
+    backgroundColor: "rgba(255, 59, 48, 0.12)",
     borderRadius: 10,
     width: "100%",
     justifyContent: "center",
     alignItems: "center",
   },
-  deleteBtnFullText: { color: "#ff453a", fontSize: 16, fontWeight: "bold" },
+  deleteBtnFullText: { color: "#ff3b30", fontSize: 16, fontWeight: "bold" },
 
   // Document Viewer Modal Styles
-  viewModalOverlay: { flex: 1, backgroundColor: "#000" },
+  viewModalOverlay: { flex: 1, backgroundColor: "#fff" },
   viewModalHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -423,9 +439,17 @@ const styles = StyleSheet.create({
     paddingTop: 60,
     paddingHorizontal: 20,
     paddingBottom: 20,
-    backgroundColor: "#1c1c1e",
+    backgroundColor: "#f2f2f7",
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#d1d1d6",
   },
-  viewModalTitle: { color: "#fff", fontSize: 20, fontWeight: "bold" },
+  viewModalTitle: {
+    color: "#1a1a1a",
+    fontSize: 20,
+    fontWeight: "bold",
+    flex: 1,
+    marginRight: 12,
+  },
   documentContainer: { flex: 1, backgroundColor: "#fff" },
   fullDocImage: { flex: 1, width: "100%", height: "100%" },
   webview: { flex: 1 },

@@ -22,6 +22,20 @@ import { GooglePlacesAutocomplete } from "react-native-google-places-autocomplet
 import DateTimePickerModal from "react-native-modal-datetime-picker";
 import MapView, { Marker } from "react-native-maps";
 import { apiFetch } from "../services/apiClient";
+import {
+  LIMITS,
+  formatTime,
+  parseTime,
+  validateActivity,
+  validateNotes,
+} from "../utils/validation";
+
+type EventFieldErrors = {
+  place?: string;
+  activity?: string;
+  time?: string;
+  notes?: string;
+};
 
 export default function TripDetailsScreen() {
   const { id, title, location, date } = useLocalSearchParams();
@@ -48,12 +62,31 @@ export default function TripDetailsScreen() {
   const [isMapView, setIsMapView] = useState(false);
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<any | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<EventFieldErrors>({});
   const googlePlacesRef = useRef<any>(null);
-  const handleConfirmTime = (date: Date) => {
-    const hours = date.getHours().toString().padStart(2, "0");
-    const minutes = date.getMinutes().toString().padStart(2, "0");
-    setNewTime(`${hours}:${minutes}`);
+
+  const handleConfirmTime = (picked: Date) => {
+    setNewTime(formatTime(picked));
+    setFieldErrors((prev) => ({ ...prev, time: undefined }));
     setTimePickerVisible(false);
+  };
+
+  /** Clears one field's error as soon as the user starts correcting it. */
+  const clearFieldError = (field: keyof EventFieldErrors) =>
+    setFieldErrors((prev) =>
+      prev[field] ? { ...prev, [field]: undefined } : prev,
+    );
+
+  const resetEventForm = () => {
+    setEditingEventId(null);
+    setNewActivity("");
+    setNewTime("");
+    setNewPlace("");
+    setNewLat(null);
+    setNewLng(null);
+    setNewNotes("");
+    setFieldErrors({});
+    googlePlacesRef.current?.setAddressText("");
   };
 
   const sortByTime = (items: any[]) =>
@@ -72,41 +105,37 @@ export default function TripDetailsScreen() {
   };
 
   const handleAddEvent = async () => {
-    // Log the current state values to see what is missing during edit
-    console.log("Edit Check:", {
-      newActivity,
-      newTime,
-      newPlace,
-      newLat,
-      newLng,
-      newNotes,
-    });
+    // A place is only usable once it carries coordinates, which the Google
+    // Places autocomplete attaches when a suggestion is actually tapped.
+    const hasCoordinates =
+      newLat !== null &&
+      newLat !== undefined &&
+      newLng !== null &&
+      newLng !== undefined;
 
-    // Ensure all fields including coordinates are present and not undefined
-    if (
-      !newActivity ||
-      !newTime ||
-      !newPlace ||
-      newLat === null ||
-      newLat === undefined ||
-      newLng === null ||
-      newLng === undefined
-    ) {
-      alert(
-        "Please make sure to select a valid location from the search suggestions so coordinates are saved.",
-      );
-      return;
-    }
+    const errors: EventFieldErrors = {
+      place: !newPlace.trim()
+        ? "Place is required."
+        : !hasCoordinates
+          ? "Pick a place from the suggestions so its location is saved."
+          : undefined,
+      activity: validateActivity(newActivity) ?? undefined,
+      time: !newTime ? "Please choose a time." : undefined,
+      notes: validateNotes(newNotes) ?? undefined,
+    };
+    setFieldErrors(errors);
+
+    if (errors.place || errors.activity || errors.time || errors.notes) return;
 
     const eventData = {
       // Keep the existing ID if we are editing, otherwise generate a new one
       id: editingEventId ? editingEventId : Math.random().toString(),
       time: newTime,
-      place: newActivity,
-      address: newPlace,
+      place: newActivity.trim(),
+      address: newPlace.trim(),
       lat: newLat,
       lng: newLng,
-      notes: newNotes,
+      notes: newNotes.trim(),
     };
 
     try {
@@ -133,25 +162,22 @@ export default function TripDetailsScreen() {
 
         // Reset form and close modal
         setIsModalVisible(false);
-        setEditingEventId(null);
-        setNewActivity("");
-        setNewTime("");
-        setNewPlace("");
-        setNewLat(null);
-        setNewLng(null);
-        setNewNotes("");
-
-        if (googlePlacesRef.current) {
-          googlePlacesRef.current.setAddressText("");
-        }
+        resetEventForm();
       } else {
         // Read the exact error message from the server
         const errorText = await response.text();
         console.error("Server rejected the save:", response.status, errorText);
-        alert(`Server error ${response.status}. Check terminal for details.`);
+        Alert.alert(
+          "Could not save event",
+          `The server rejected the request (${response.status}). Please try again.`,
+        );
       }
     } catch (error) {
       console.error("Error saving event:", error);
+      Alert.alert(
+        "Connection problem",
+        "Could not reach the server. Check your connection and try again.",
+      );
     }
   };
 
@@ -293,6 +319,8 @@ export default function TripDetailsScreen() {
     setNewLat(event.lat);
     setNewLng(event.lng);
     setNewNotes(event.notes || "");
+    // Start clean so errors from a previous edit do not carry over.
+    setFieldErrors({});
 
     // First, trigger the modal to open
     setIsModalVisible(true);
@@ -490,6 +518,7 @@ export default function TripDetailsScreen() {
                           ) {
                             setNewLat(details.geometry.location.lat);
                             setNewLng(details.geometry.location.lng);
+                            clearFieldError("place");
                           }
                           // Dismiss keyboard after selection
                           Keyboard.dismiss();
@@ -527,23 +556,46 @@ export default function TripDetailsScreen() {
                         enablePoweredByContainer={false}
                       />
                     </View>
+                    {fieldErrors.place && (
+                      <Text style={styles.fieldErrorText}>
+                        {fieldErrors.place}
+                      </Text>
+                    )}
 
                     {/* 2. Activity Input */}
                     <Text style={styles.inputLabel}>Activity</Text>
                     <TextInput
-                      style={styles.input}
+                      style={[
+                        styles.input,
+                        fieldErrors.activity && styles.inputError,
+                      ]}
                       placeholder="e.g. Visit the Colosseum"
                       value={newActivity}
-                      onChangeText={setNewActivity}
+                      onChangeText={(text) => {
+                        setNewActivity(text);
+                        clearFieldError("activity");
+                      }}
+                      maxLength={LIMITS.activity.max}
                     />
+                    {fieldErrors.activity && (
+                      <Text style={styles.fieldErrorText}>
+                        {fieldErrors.activity}
+                      </Text>
+                    )}
 
                     {/* 3. Time Input */}
                     <Text style={styles.inputLabel}>Time</Text>
 
                     {/* Button that looks like an input to trigger the time picker */}
                     <TouchableOpacity
-                      style={[styles.input, { justifyContent: "center" }]}
+                      style={[
+                        styles.input,
+                        { justifyContent: "center" },
+                        fieldErrors.time && styles.inputError,
+                      ]}
                       onPress={() => setTimePickerVisible(true)}
+                      accessibilityRole="button"
+                      accessibilityLabel="Choose activity time"
                     >
                       <Text
                         style={{
@@ -554,11 +606,20 @@ export default function TripDetailsScreen() {
                         {newTime ? newTime : "Select time"}
                       </Text>
                     </TouchableOpacity>
+                    {fieldErrors.time && (
+                      <Text style={styles.fieldErrorText}>
+                        {fieldErrors.time}
+                      </Text>
+                    )}
 
-                    {/* The native modal time picker component */}
+                    {/* Native scroll-wheel time picker, opened on the value
+                        already chosen so editing starts from the current time. */}
                     <DateTimePickerModal
                       isVisible={isTimePickerVisible}
                       mode="time"
+                      display="spinner"
+                      is24Hour={true}
+                      date={parseTime(newTime) ?? new Date()}
                       onConfirm={handleConfirmTime}
                       onCancel={() => setTimePickerVisible(false)}
                     />
@@ -568,28 +629,29 @@ export default function TripDetailsScreen() {
                       style={[
                         styles.input,
                         { height: 80, textAlignVertical: "top" },
+                        fieldErrors.notes && styles.inputError,
                       ]}
                       placeholder="Special instructions or tips..."
                       value={newNotes}
-                      onChangeText={setNewNotes}
+                      onChangeText={(text) => {
+                        setNewNotes(text);
+                        clearFieldError("notes");
+                      }}
                       multiline={true}
+                      maxLength={LIMITS.notes.max}
                     />
+                    {fieldErrors.notes && (
+                      <Text style={styles.fieldErrorText}>
+                        {fieldErrors.notes}
+                      </Text>
+                    )}
 
                     <View style={styles.modalButtons}>
                       <TouchableOpacity
                         style={[styles.modalButton, styles.cancelButton]}
                         onPress={() => {
                           setIsModalVisible(false);
-                          setEditingEventId(null);
-                          setNewActivity("");
-                          setNewTime("");
-                          setNewPlace("");
-                          setNewLat(null);
-                          setNewLng(null);
-                          setNewNotes("");
-
-                          // Clear the text from the Google Places input
-                          googlePlacesRef.current?.setAddressText("");
+                          resetEventForm();
                         }}
                       >
                         <Text style={styles.cancelButtonText}>Cancel</Text>
@@ -771,6 +833,14 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     fontSize: 15,
     backgroundColor: "#fafafa",
+  },
+  inputError: { borderColor: "#e53935" },
+  fieldErrorText: {
+    color: "#e53935",
+    fontSize: 12,
+    // Pulls the message up against the field it belongs to.
+    marginTop: -10,
+    marginBottom: 12,
   },
   modalButtons: {
     flexDirection: "row",

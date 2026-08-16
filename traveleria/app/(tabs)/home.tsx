@@ -11,8 +11,24 @@ import {
 } from "react-native";
 // 1. MUST import useRouter to use navigation
 import { useRouter } from "expo-router";
+import DateTimePickerModal from "react-native-modal-datetime-picker";
 import { API_URL } from "../../constants/api";
 import { apiFetch } from "../../services/apiClient";
+import {
+  LIMITS,
+  formatDate,
+  formatDateRange,
+  startOfDay,
+  validateDestination,
+  validateTripDates,
+  validateTripTitle,
+} from "../../utils/validation";
+
+type TripFieldErrors = {
+  title?: string;
+  location?: string;
+  dates?: string;
+};
 
 export default function HomeScreen() {
   const [trips, setTrips] = useState([]);
@@ -24,7 +40,11 @@ export default function HomeScreen() {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [newLocation, setNewLocation] = useState("");
-  const [newDates, setNewDates] = useState("");
+  const [startDate, setStartDate] = useState<Date | null>(null);
+  const [endDate, setEndDate] = useState<Date | null>(null);
+  const [isStartPickerVisible, setStartPickerVisible] = useState(false);
+  const [isEndPickerVisible, setEndPickerVisible] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<TripFieldErrors>({});
   const [addError, setAddError] = useState<string | null>(null);
 
   const fetchTrips = async () => {
@@ -46,30 +66,67 @@ export default function HomeScreen() {
     }
   };
 
+  const resetTripForm = () => {
+    setNewTitle("");
+    setNewLocation("");
+    setStartDate(null);
+    setEndDate(null);
+    setFieldErrors({});
+    setAddError(null);
+  };
+
+  const closeTripModal = () => {
+    setIsModalVisible(false);
+    resetTripForm();
+  };
+
+  /** Picking a start date after the current end date drags the end along. */
+  const handleConfirmStartDate = (date: Date) => {
+    const picked = startOfDay(date);
+    setStartDate(picked);
+    if (endDate && endDate < picked) setEndDate(picked);
+    setFieldErrors((prev) => ({ ...prev, dates: undefined }));
+    setStartPickerVisible(false);
+  };
+
+  const handleConfirmEndDate = (date: Date) => {
+    setEndDate(startOfDay(date));
+    setFieldErrors((prev) => ({ ...prev, dates: undefined }));
+    setEndPickerVisible(false);
+  };
+
   const handleAddTrip = async () => {
     setAddError(null);
-    if (!newTitle || !newLocation || !newDates) {
-      setAddError("Please fill in all fields.");
-      return;
-    }
+
+    const errors: TripFieldErrors = {
+      title: validateTripTitle(newTitle) ?? undefined,
+      location: validateDestination(newLocation) ?? undefined,
+      dates: validateTripDates(startDate, endDate) ?? undefined,
+    };
+    setFieldErrors(errors);
+
+    // Bail out if any rule failed; the messages are already on screen.
+    if (errors.title || errors.location || errors.dates) return;
 
     try {
       const response = await apiFetch("/trips", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: newTitle, date: newDates, location: newLocation.toUpperCase() }),
+        body: JSON.stringify({
+          title: newTitle.trim(),
+          // Non-null: validateTripDates above guarantees both dates are set.
+          date: formatDateRange(startDate!, endDate!),
+          location: newLocation.trim().toUpperCase(),
+        }),
       });
 
       if (response.ok) {
         fetchTrips();
-        setNewTitle("");
-        setNewLocation("");
-        setNewDates("");
-        setAddError(null);
         setIsModalVisible(false);
+        resetTripForm();
       } else {
         const data = await response.json();
-        setAddError(data?.detail || "Failed to create trip.");
+        setAddError(data?.detail || data?.error || "Failed to create trip.");
       }
     } catch (err) {
       setAddError("Could not connect to server.");
@@ -123,29 +180,110 @@ export default function HomeScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>New Journey</Text>
+
+            <Text style={styles.inputLabel}>Trip Title</Text>
             <TextInput
-              style={styles.input}
-              placeholder="Trip Title"
+              style={[styles.input, fieldErrors.title && styles.inputError]}
+              placeholder="e.g. Summer in Italy"
               value={newTitle}
-              onChangeText={setNewTitle}
+              onChangeText={(text) => {
+                setNewTitle(text);
+                if (fieldErrors.title)
+                  setFieldErrors((prev) => ({ ...prev, title: undefined }));
+              }}
+              maxLength={LIMITS.tripTitle.max}
             />
+            {fieldErrors.title && (
+              <Text style={styles.fieldErrorText}>{fieldErrors.title}</Text>
+            )}
+
+            <Text style={styles.inputLabel}>Destination</Text>
             <TextInput
-              style={styles.input}
-              placeholder="Destination"
+              style={[styles.input, fieldErrors.location && styles.inputError]}
+              placeholder="e.g. Rome"
               value={newLocation}
-              onChangeText={setNewLocation}
+              onChangeText={(text) => {
+                setNewLocation(text);
+                if (fieldErrors.location)
+                  setFieldErrors((prev) => ({ ...prev, location: undefined }));
+              }}
+              maxLength={LIMITS.destination.max}
             />
-            <TextInput
-              style={styles.input}
-              placeholder="DD.MM.YYYY - DD.MM.YYYY"
-              value={newDates}
-              onChangeText={setNewDates}
+            {fieldErrors.location && (
+              <Text style={styles.fieldErrorText}>{fieldErrors.location}</Text>
+            )}
+
+            <Text style={styles.inputLabel}>Dates</Text>
+            <View style={styles.dateRow}>
+              <TouchableOpacity
+                style={[
+                  styles.input,
+                  styles.dateInput,
+                  fieldErrors.dates && styles.inputError,
+                ]}
+                onPress={() => setStartPickerVisible(true)}
+                accessibilityRole="button"
+                accessibilityLabel="Choose start date"
+              >
+                <Text
+                  style={
+                    startDate ? styles.dateValueText : styles.datePlaceholder
+                  }
+                >
+                  {startDate ? formatDate(startDate) : "Start date"}
+                </Text>
+              </TouchableOpacity>
+
+              <Text style={styles.dateSeparator}>–</Text>
+
+              <TouchableOpacity
+                style={[
+                  styles.input,
+                  styles.dateInput,
+                  fieldErrors.dates && styles.inputError,
+                ]}
+                onPress={() => setEndPickerVisible(true)}
+                accessibilityRole="button"
+                accessibilityLabel="Choose end date"
+              >
+                <Text
+                  style={
+                    endDate ? styles.dateValueText : styles.datePlaceholder
+                  }
+                >
+                  {endDate ? formatDate(endDate) : "End date"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            {fieldErrors.dates && (
+              <Text style={styles.fieldErrorText}>{fieldErrors.dates}</Text>
+            )}
+
+            {/* Native scroll-wheel pickers */}
+            <DateTimePickerModal
+              isVisible={isStartPickerVisible}
+              mode="date"
+              display="spinner"
+              date={startDate ?? new Date()}
+              onConfirm={handleConfirmStartDate}
+              onCancel={() => setStartPickerVisible(false)}
             />
+            <DateTimePickerModal
+              isVisible={isEndPickerVisible}
+              mode="date"
+              display="spinner"
+              date={endDate ?? startDate ?? new Date()}
+              // The trip cannot end before it starts.
+              minimumDate={startDate ?? undefined}
+              onConfirm={handleConfirmEndDate}
+              onCancel={() => setEndPickerVisible(false)}
+            />
+
             {addError && <Text style={styles.addErrorText}>{addError}</Text>}
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => { setIsModalVisible(false); setAddError(null); }}
+                onPress={closeTripModal}
               >
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
@@ -240,6 +378,12 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     textAlign: "center",
   },
+  inputLabel: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#555",
+    marginBottom: 5,
+  },
   input: {
     borderWidth: 1,
     borderColor: "#ddd",
@@ -248,6 +392,24 @@ const styles = StyleSheet.create({
     marginBottom: 15,
     fontSize: 16,
   },
+  inputError: { borderColor: "#e53935" },
+  fieldErrorText: {
+    color: "#e53935",
+    fontSize: 12,
+    marginTop: -10,
+    marginBottom: 12,
+  },
+  dateRow: { flexDirection: "row", alignItems: "center" },
+  // flex so the two date buttons split the row evenly.
+  dateInput: { flex: 1, justifyContent: "center" },
+  dateSeparator: {
+    marginHorizontal: 8,
+    marginBottom: 15,
+    color: "#888",
+    fontSize: 16,
+  },
+  dateValueText: { fontSize: 16, color: "#1a1a1a" },
+  datePlaceholder: { fontSize: 16, color: "#aaa" },
   modalButtons: { flexDirection: "row", justifyContent: "space-between" },
   modalButton: {
     flex: 1,
