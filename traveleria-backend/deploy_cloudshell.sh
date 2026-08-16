@@ -9,7 +9,7 @@ REGION="us-east-1"
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/LabRole"
 
-DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@traveleria-db.csixbhjy2zmt.us-east-1.rds.amazonaws.com:5432/traveleria_db"
+DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@YOUR_RDS_HOST:5432/YOUR_DB_NAME"
 
 COGNITO_REGION="us-east-1"
 COGNITO_USER_POOL_ID="us-east-1_hxHdB32mE"
