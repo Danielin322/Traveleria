@@ -8,6 +8,7 @@
 #   COGNITO_REGION=us-east-1
 #   COGNITO_USER_POOL_ID=your-pool-id
 #   COGNITO_APP_CLIENT_ID=your-client-id
+#   OPENAI_API_KEY=your-openai-api-key
 # See .env.example for a template.
 
 set -euo pipefail
@@ -24,6 +25,7 @@ set +o allexport
 : "${DATABASE_URL:?DATABASE_URL must be set in .env}"
 : "${COGNITO_USER_POOL_ID:?COGNITO_USER_POOL_ID must be set in .env}"
 : "${COGNITO_APP_CLIENT_ID:?COGNITO_APP_CLIENT_ID must be set in .env}"
+: "${OPENAI_API_KEY:?OPENAI_API_KEY must be set in .env}"
 # ─────────────────────────────────────────────────────────────────────────
 
 REGION="us-east-1"
@@ -32,7 +34,7 @@ ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/LabRole"
 
 COGNITO_REGION="${COGNITO_REGION:-us-east-1}"
 
-ENV_JSON="{\"Variables\":{\"DATABASE_URL\":\"${DATABASE_URL}\",\"COGNITO_REGION\":\"${COGNITO_REGION}\",\"COGNITO_USER_POOL_ID\":\"${COGNITO_USER_POOL_ID}\",\"COGNITO_APP_CLIENT_ID\":\"${COGNITO_APP_CLIENT_ID}\"}}"
+ENV_JSON="{\"Variables\":{\"DATABASE_URL\":\"${DATABASE_URL}\",\"COGNITO_REGION\":\"${COGNITO_REGION}\",\"COGNITO_USER_POOL_ID\":\"${COGNITO_USER_POOL_ID}\",\"COGNITO_APP_CLIENT_ID\":\"${COGNITO_APP_CLIENT_ID}\",\"OPENAI_API_KEY\":\"${OPENAI_API_KEY}\"}}"
 
 LAMBDAS=(
     "health"
@@ -90,7 +92,7 @@ pip install --quiet --target ./deps \
     --platform manylinux2014_x86_64 \
     --python-version 3.11 \
     --only-binary=:all: \
-    "psycopg[binary]" "PyJWT[crypto]" python-dotenv typing_extensions
+    "psycopg[binary]" "PyJWT[crypto]" python-dotenv typing_extensions openai
 
 # ── Step 2: Build one zip per Lambda ──────────────────────────────────────
 echo ""
