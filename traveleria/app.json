@@ -10,7 +10,11 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.hadarf2.traveleria",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -20,7 +24,8 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.hadarf2.traveleria"
     },
     "plugins": [
       "expo-router",
@@ -47,7 +52,7 @@
         "projectId": "15cb608e-ab6a-480b-aa8a-34ef492d663a"
       }
     },
-    "owner": "hadarf",
+    "owner": "traveleria",
     "runtimeVersion": {
       "policy": "sdkVersion"
     },
