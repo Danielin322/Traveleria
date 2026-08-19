@@ -36,6 +36,13 @@ def parse_trip_dates(date_range: str) -> tuple[date, date]:
     return start, end
 
 
+def parse_single_date(value: str, field_name: str = "date") -> date:
+    try:
+        return datetime.strptime(value.strip(), "%d.%m.%Y").date()
+    except (ValueError, AttributeError):
+        raise AppError(f"{field_name} must use the format DD.MM.YYYY")
+
+
 def format_trip_date(start: date, end: date) -> str:
     return f"{start.strftime('%d.%m.%Y')} - {end.strftime('%d.%m.%Y')}"
 
@@ -70,6 +77,33 @@ def get_or_create_default_trip_day(db, trip_id: uuid.UUID, owner_user_id: uuid.U
         RETURNING id
         """,
         (trip_id, owner_user_id),
+    )
+    row = db.fetchone()
+    if not row:
+        raise AppError("Trip not found", status=404)
+    return row["id"]
+
+
+def get_or_create_trip_day_for_date(db, trip_id: uuid.UUID, owner_user_id: uuid.UUID, day_date: date) -> uuid.UUID:
+    db.execute(
+        """
+        SELECT trip_days.id FROM trip_days
+        JOIN trips ON trips.id = trip_days.trip_id
+        WHERE trip_days.trip_id = %s AND trips.owner_user_id = %s AND trip_days.day_date = %s
+        """,
+        (trip_id, owner_user_id, day_date),
+    )
+    row = db.fetchone()
+    if row:
+        return row["id"]
+    db.execute(
+        """
+        INSERT INTO trip_days (trip_id, day_date)
+        SELECT id, %s FROM trips
+        WHERE id = %s AND owner_user_id = %s
+        RETURNING id
+        """,
+        (day_date, trip_id, owner_user_id),
     )
     row = db.fetchone()
     if not row:

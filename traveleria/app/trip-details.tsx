@@ -219,6 +219,10 @@ export default function TripDetailsScreen() {
         ...prev,
         { id: (Date.now() + 1).toString(), text: data.text, isUser: false },
       ]);
+
+      if (data.added_item) {
+        setItinerary((prev) => sortByTime([...prev, data.added_item]));
+      }
     } catch (error) {
       console.error("Chat error:", error);
       setMessages((prev) => [

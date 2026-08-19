@@ -9,6 +9,7 @@
 #   COGNITO_USER_POOL_ID=your-pool-id
 #   COGNITO_APP_CLIENT_ID=your-client-id
 #   OPENAI_API_KEY=your-openai-api-key
+#   GOOGLE_PLACES_API_KEY=your-google-places-api-key   (optional — enables map pins for chat-added items)
 # See .env.example for a template.
 
 set -euo pipefail
@@ -33,8 +34,9 @@ ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/LabRole"
 
 COGNITO_REGION="${COGNITO_REGION:-us-east-1}"
+GOOGLE_PLACES_API_KEY="${GOOGLE_PLACES_API_KEY:-}"
 
-ENV_JSON="{\"Variables\":{\"DATABASE_URL\":\"${DATABASE_URL}\",\"COGNITO_REGION\":\"${COGNITO_REGION}\",\"COGNITO_USER_POOL_ID\":\"${COGNITO_USER_POOL_ID}\",\"COGNITO_APP_CLIENT_ID\":\"${COGNITO_APP_CLIENT_ID}\",\"OPENAI_API_KEY\":\"${OPENAI_API_KEY}\"}}"
+ENV_JSON="{\"Variables\":{\"DATABASE_URL\":\"${DATABASE_URL}\",\"COGNITO_REGION\":\"${COGNITO_REGION}\",\"COGNITO_USER_POOL_ID\":\"${COGNITO_USER_POOL_ID}\",\"COGNITO_APP_CLIENT_ID\":\"${COGNITO_APP_CLIENT_ID}\",\"OPENAI_API_KEY\":\"${OPENAI_API_KEY}\",\"GOOGLE_PLACES_API_KEY\":\"${GOOGLE_PLACES_API_KEY}\"}}"
 
 LAMBDAS=(
     "health"
@@ -92,7 +94,7 @@ pip install --quiet --target ./deps \
     --platform manylinux2014_x86_64 \
     --python-version 3.11 \
     --only-binary=:all: \
-    "psycopg[binary]" "PyJWT[crypto]" python-dotenv typing_extensions openai
+    "psycopg[binary]" "PyJWT[crypto]" python-dotenv typing_extensions openai httpx
 
 # ── Step 2: Build one zip per Lambda ──────────────────────────────────────
 echo ""
