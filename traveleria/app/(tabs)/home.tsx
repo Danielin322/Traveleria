@@ -339,16 +339,21 @@ export default function HomeScreen() {
               </View>
             </View>
           </ScrollView>
+
+          {/*
+            Must live INSIDE this Modal, not beside it. React Native cannot
+            present a second modal on top of an already-visible one from a
+            sibling position — it renders nothing at all.
+          */}
+          <DateRangePicker
+            visible={isDatePickerVisible}
+            initialStart={startDate}
+            initialEnd={endDate}
+            onConfirm={handleConfirmDates}
+            onCancel={() => setDatePickerVisible(false)}
+          />
         </KeyboardAvoidingView>
       </Modal>
-
-      <DateRangePicker
-        visible={isDatePickerVisible}
-        initialStart={startDate}
-        initialEnd={endDate}
-        onConfirm={handleConfirmDates}
-        onCancel={() => setDatePickerVisible(false)}
-      />
 
       {loading ? (
         <ActivityIndicator size="large" color={colors.primary} />
