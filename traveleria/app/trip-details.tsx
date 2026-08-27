@@ -606,6 +606,7 @@ export default function TripDetailsScreen() {
                         fieldErrors.activity && styles.inputError,
                       ]}
                       placeholder="e.g. Visit the Colosseum"
+                      placeholderTextColor={colors.textDisabled}
                       value={newActivity}
                       onChangeText={(text) => {
                         setNewActivity(text);
@@ -667,6 +668,7 @@ export default function TripDetailsScreen() {
                         fieldErrors.notes && styles.inputError,
                       ]}
                       placeholder="Special instructions or tips..."
+                      placeholderTextColor={colors.textDisabled}
                       value={newNotes}
                       onChangeText={(text) => {
                         setNewNotes(text);
@@ -775,6 +777,7 @@ export default function TripDetailsScreen() {
               <TextInput
                 style={styles.chatInput}
                 placeholder="Ask the AI assistant..."
+                placeholderTextColor={colors.textDisabled}
                 value={inputText}
                 onChangeText={setInputText}
                 editable={!isAiTyping}

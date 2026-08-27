@@ -373,6 +373,7 @@ export default function SocialScreen() {
             <TextInput
               style={styles.composerInput}
               placeholder="Share an experience..."
+              placeholderTextColor={colors.textDisabled}
               value={draftText}
               onChangeText={setDraftText}
               multiline
@@ -650,6 +651,7 @@ export default function SocialScreen() {
                 placeholder={
                   replyTarget ? "Write a reply..." : "Add a comment..."
                 }
+                placeholderTextColor={colors.textDisabled}
                 value={commentDraft}
                 onChangeText={setCommentDraft}
                 multiline
@@ -752,6 +754,9 @@ const makeStyles = (colors: ThemeColors) =>
     fontSize: 15,
     textAlignVertical: "top",
     marginBottom: 12,
+    // Without an explicit colour a TextInput renders black in both themes.
+    color: colors.textPrimary,
+    backgroundColor: colors.surfaceSunken,
   },
   draftImageWrap: { position: "relative", marginBottom: 12 },
   draftImage: { width: "100%", height: 180, borderRadius: 12 },
@@ -865,6 +870,9 @@ const makeStyles = (colors: ThemeColors) =>
     paddingVertical: 8,
     fontSize: 14,
     marginRight: 8,
+    // Without an explicit colour a TextInput renders black in both themes.
+    color: colors.textPrimary,
+    backgroundColor: colors.surfaceSunken,
   },
   sendBtn: {
     backgroundColor: colors.primary,
