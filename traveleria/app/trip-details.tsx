@@ -23,6 +23,17 @@ import DateTimePickerModal from "react-native-modal-datetime-picker";
 import MapView, { Marker } from "react-native-maps";
 import { apiFetch } from "../services/apiClient";
 
+const renderMessageText = (text: string) =>
+  text.split(/(\*\*.*?\*\*)/g).map((part, index) =>
+    part.startsWith("**") && part.endsWith("**") ? (
+      <Text key={index} style={{ fontWeight: "bold" }}>
+        {part.slice(2, -2)}
+      </Text>
+    ) : (
+      <Text key={index}>{part}</Text>
+    ),
+  );
+
 export default function TripDetailsScreen() {
   const { id, title, location, date } = useLocalSearchParams();
 
@@ -220,8 +231,14 @@ export default function TripDetailsScreen() {
         { id: (Date.now() + 1).toString(), text: data.text, isUser: false },
       ]);
 
-      if (data.added_item) {
-        setItinerary((prev) => sortByTime([...prev, data.added_item]));
+      if (data.added_items?.length) {
+        setItinerary((prev) => sortByTime([...prev, ...data.added_items]));
+      }
+
+      if (data.removed_item_ids?.length) {
+        setItinerary((prev) =>
+          prev.filter((item) => !data.removed_item_ids.includes(item.id)),
+        );
       }
     } catch (error) {
       console.error("Chat error:", error);
@@ -645,7 +662,7 @@ export default function TripDetailsScreen() {
                       item.isUser ? styles.userText : styles.aiText,
                     ]}
                   >
-                    {item.text}
+                    {renderMessageText(item.text)}
                   </Text>
                 </View>
               )}

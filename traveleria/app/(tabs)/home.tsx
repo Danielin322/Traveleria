@@ -57,7 +57,7 @@ export default function HomeScreen() {
       const response = await apiFetch("/trips", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: newTitle, date: newDates, location: newLocation.toUpperCase() }),
+        body: JSON.stringify({ title: newTitle, date: newDates, location: newLocation }),
       });
 
       if (response.ok) {
