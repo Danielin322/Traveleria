@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -10,14 +11,23 @@ import {
   SectionList,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
-// 1. MUST import useRouter to use navigation
-import { useRouter } from "expo-router";
-import DateTimePickerModal from "react-native-modal-datetime-picker";
+
+import { AppButton } from "../../components/AppButton";
+import { DateRangePicker } from "../../components/DateRangePicker";
+import { FormField, useFieldStyles } from "../../components/FormField";
 import { API_URL } from "../../constants/api";
+import {
+  Elevation,
+  FontFamily,
+  FontSize,
+  Radius,
+  Spacing,
+  ThemeColors,
+} from "../../constants/theme";
+import { useThemeColors } from "../../contexts/ThemeContext";
 import { apiFetch } from "../../services/apiClient";
 import {
   formatTripBadge,
@@ -27,9 +37,7 @@ import {
 } from "../../utils/tripFormat";
 import {
   LIMITS,
-  formatDate,
   formatDateRange,
-  startOfDay,
   validateDestination,
   validateTripDates,
   validateTripTitle,
@@ -48,14 +56,16 @@ export default function HomeScreen() {
   const [error, setError] = useState<string | null>(null);
 
   const router = useRouter();
+  const colors = useThemeColors();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const fieldStyles = useFieldStyles();
 
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [newLocation, setNewLocation] = useState("");
   const [startDate, setStartDate] = useState<Date | null>(null);
   const [endDate, setEndDate] = useState<Date | null>(null);
-  const [isStartPickerVisible, setStartPickerVisible] = useState(false);
-  const [isEndPickerVisible, setEndPickerVisible] = useState(false);
+  const [isDatePickerVisible, setDatePickerVisible] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<TripFieldErrors>({});
   const [addError, setAddError] = useState<string | null>(null);
   // Guards against a double tap creating the same trip twice.
@@ -72,7 +82,9 @@ export default function HomeScreen() {
 
   const fetchTrips = async () => {
     if (!API_URL) {
-      setError("API URL is not configured. Please set EXPO_PUBLIC_API_URL in your .env file.");
+      setError(
+        "API URL is not configured. Please set EXPO_PUBLIC_API_URL in your .env file.",
+      );
       setLoading(false);
       return;
     }
@@ -82,7 +94,9 @@ export default function HomeScreen() {
       const data = await response.json();
       setTrips(data);
     } catch (err) {
-      setError("Could not connect to server. Make sure the backend is running.");
+      setError(
+        "Could not connect to server. Make sure the backend is running.",
+      );
       console.error("Error fetching trips:", err);
     } finally {
       setLoading(false);
@@ -110,19 +124,11 @@ export default function HomeScreen() {
     resetTripForm();
   };
 
-  /** Picking a start date after the current end date drags the end along. */
-  const handleConfirmStartDate = (date: Date) => {
-    const picked = startOfDay(date);
-    setStartDate(picked);
-    if (endDate && endDate < picked) setEndDate(picked);
+  const handleConfirmDates = (start: Date, end: Date) => {
+    setStartDate(start);
+    setEndDate(end);
     setFieldErrors((prev) => ({ ...prev, dates: undefined }));
-    setStartPickerVisible(false);
-  };
-
-  const handleConfirmEndDate = (date: Date) => {
-    setEndDate(startOfDay(date));
-    setFieldErrors((prev) => ({ ...prev, dates: undefined }));
-    setEndPickerVisible(false);
+    setDatePickerVisible(false);
   };
 
   const handleAddTrip = async () => {
@@ -218,10 +224,15 @@ export default function HomeScreen() {
           <Text style={styles.tripTitle}>{item.title}</Text>
           <Text style={styles.dateText}>{formatTripDates(item.date)}</Text>
         </View>
-        <Text style={styles.viewLink}>View {">"}</Text>
+        <Ionicons name="chevron-forward" size={20} color={colors.primary} />
       </TouchableOpacity>
     );
   };
+
+  const dateSummary =
+    startDate && endDate
+      ? formatDateRange(startDate, endDate)
+      : "Select your dates";
 
   return (
     <View style={styles.container}>
@@ -230,12 +241,12 @@ export default function HomeScreen() {
         Plan, organize, and share your adventures.
       </Text>
 
-      <TouchableOpacity
-        style={styles.planButton}
+      <AppButton
+        label="Plan Trip"
+        icon="add"
         onPress={() => setIsModalVisible(true)}
-      >
-        <Text style={styles.planButtonText}>+ Plan Trip</Text>
-      </TouchableOpacity>
+        style={styles.planButton}
+      />
 
       <Modal visible={isModalVisible} animationType="slide" transparent={true}>
         {/* Keeps the Create button reachable once the keyboard is up. */}
@@ -251,11 +262,11 @@ export default function HomeScreen() {
             <View style={styles.modalContent}>
               <Text style={styles.modalTitle}>New Journey</Text>
 
-              <Text style={styles.inputLabel}>Trip Title</Text>
-              <TextInput
-                style={[styles.input, fieldErrors.title && styles.inputError]}
+              <FormField
+                label="Trip Title"
                 placeholder="e.g. Summer in Italy"
                 value={newTitle}
+                error={fieldErrors.title}
                 onChangeText={(text) => {
                   setNewTitle(text);
                   if (fieldErrors.title)
@@ -263,130 +274,88 @@ export default function HomeScreen() {
                 }}
                 maxLength={LIMITS.tripTitle.max}
               />
-              {fieldErrors.title && (
-                <Text style={styles.fieldErrorText}>{fieldErrors.title}</Text>
-              )}
 
-              <Text style={styles.inputLabel}>Destination</Text>
-              <TextInput
-                style={[styles.input, fieldErrors.location && styles.inputError]}
+              <FormField
+                label="Destination"
                 placeholder="e.g. Rome"
                 value={newLocation}
+                error={fieldErrors.location}
                 onChangeText={(text) => {
                   setNewLocation(text);
                   if (fieldErrors.location)
-                    setFieldErrors((prev) => ({ ...prev, location: undefined }));
+                    setFieldErrors((prev) => ({
+                      ...prev,
+                      location: undefined,
+                    }));
                 }}
                 maxLength={LIMITS.destination.max}
               />
-              {fieldErrors.location && (
-                <Text style={styles.fieldErrorText}>{fieldErrors.location}</Text>
-              )}
 
-              <Text style={styles.inputLabel}>Dates</Text>
-              <View style={styles.dateRow}>
+              {/* Looks like an input, opens the range calendar. */}
+              <FormField label="Dates" error={fieldErrors.dates}>
                 <TouchableOpacity
                   style={[
-                    styles.input,
-                    styles.dateInput,
-                    fieldErrors.dates && styles.inputError,
+                    fieldStyles.input,
+                    styles.dateTrigger,
+                    !!fieldErrors.dates && fieldStyles.inputError,
                   ]}
-                  onPress={() => setStartPickerVisible(true)}
+                  onPress={() => setDatePickerVisible(true)}
                   accessibilityRole="button"
-                  accessibilityLabel="Choose start date"
+                  accessibilityLabel="Choose trip dates"
                 >
                   <Text
                     style={
-                      startDate ? styles.dateValueText : styles.datePlaceholder
+                      startDate && endDate
+                        ? styles.dateValueText
+                        : styles.datePlaceholder
                     }
                   >
-                    {startDate ? formatDate(startDate) : "Start date"}
+                    {dateSummary}
                   </Text>
+                  <Ionicons
+                    name="calendar-outline"
+                    size={20}
+                    color={colors.textMuted}
+                  />
                 </TouchableOpacity>
-
-                <Text style={styles.dateSeparator}>–</Text>
-
-                <TouchableOpacity
-                  style={[
-                    styles.input,
-                    styles.dateInput,
-                    fieldErrors.dates && styles.inputError,
-                  ]}
-                  onPress={() => setEndPickerVisible(true)}
-                  accessibilityRole="button"
-                  accessibilityLabel="Choose end date"
-                >
-                  <Text
-                    style={
-                      endDate ? styles.dateValueText : styles.datePlaceholder
-                    }
-                  >
-                    {endDate ? formatDate(endDate) : "End date"}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-              {fieldErrors.dates && (
-                <Text style={styles.fieldErrorText}>{fieldErrors.dates}</Text>
-              )}
-
-              {/* Native scroll-wheel pickers */}
-              <DateTimePickerModal
-                isVisible={isStartPickerVisible}
-                mode="date"
-                display="spinner"
-                date={startDate ?? new Date()}
-                onConfirm={handleConfirmStartDate}
-                onCancel={() => setStartPickerVisible(false)}
-              />
-              <DateTimePickerModal
-                isVisible={isEndPickerVisible}
-                mode="date"
-                display="spinner"
-                date={endDate ?? startDate ?? new Date()}
-                // The trip cannot end before it starts.
-                minimumDate={startDate ?? undefined}
-                onConfirm={handleConfirmEndDate}
-                onCancel={() => setEndPickerVisible(false)}
-              />
+              </FormField>
 
               {addError && <Text style={styles.addErrorText}>{addError}</Text>}
+
               <View style={styles.modalButtons}>
-                <TouchableOpacity
-                  style={[styles.modalButton, styles.cancelButton]}
+                <AppButton
+                  label="Cancel"
+                  variant="secondary"
                   onPress={closeTripModal}
                   disabled={isSubmitting}
-                >
-                  <Text style={styles.cancelButtonText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[
-                    styles.modalButton,
-                    styles.saveButton,
-                    isSubmitting && styles.buttonDisabled,
-                  ]}
+                  style={styles.modalButton}
+                />
+                <AppButton
+                  label="Create"
                   onPress={handleAddTrip}
-                  disabled={isSubmitting}
-                >
-                  {isSubmitting ? (
-                    <ActivityIndicator size="small" color="#fff" />
-                  ) : (
-                    <Text style={styles.saveButtonText}>Create</Text>
-                  )}
-                </TouchableOpacity>
+                  loading={isSubmitting}
+                  style={styles.modalButton}
+                />
               </View>
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
       </Modal>
 
+      <DateRangePicker
+        visible={isDatePickerVisible}
+        initialStart={startDate}
+        initialEnd={endDate}
+        onConfirm={handleConfirmDates}
+        onCancel={() => setDatePickerVisible(false)}
+      />
+
       {loading ? (
-        <ActivityIndicator size="large" color="#2f6deb" />
+        <ActivityIndicator size="large" color={colors.primary} />
       ) : error ? (
         <View style={styles.errorContainer}>
           <Text style={styles.errorText}>{error}</Text>
-          <TouchableOpacity style={styles.retryButton} onPress={fetchTrips}>
-            <Text style={styles.retryButtonText}>Retry</Text>
-          </TouchableOpacity>
+          <AppButton label="Retry" onPress={fetchTrips} />
         </View>
       ) : (
         <SectionList
@@ -405,16 +374,20 @@ export default function HomeScreen() {
             <RefreshControl
               refreshing={refreshing}
               onRefresh={handleRefresh}
-              colors={["#2f6deb"]}
-              tintColor="#2f6deb"
+              colors={[colors.primary]}
+              tintColor={colors.primary}
             />
           }
           ListEmptyComponent={
             <View style={styles.emptyState}>
-              <Ionicons name="airplane-outline" size={52} color="#c7d0da" />
+              <Ionicons
+                name="airplane-outline"
+                size={52}
+                color={colors.textDisabled}
+              />
               <Text style={styles.emptyText}>No trips yet</Text>
               <Text style={styles.emptySubText}>
-                Tap “+ Plan Trip” to start your first journey.
+                Tap “Plan Trip” to start your first journey.
               </Text>
             </View>
           }
@@ -424,146 +397,154 @@ export default function HomeScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#f4f6f8",
-    padding: 20,
-    paddingTop: 60,
-  },
-  title: { fontSize: 30, fontWeight: "bold", color: "#1a1a1a" },
-  subtitle: { fontSize: 16, color: "#666", marginBottom: 25 },
-  planButton: {
-    backgroundColor: "#2f6deb",
-    padding: 15,
-    borderRadius: 12,
-    alignItems: "center",
-    marginBottom: 20,
-  },
-  planButtonText: { color: "#fff", fontSize: 18, fontWeight: "bold" },
-  listContainer: { paddingBottom: 20 },
-  tripCard: {
-    backgroundColor: "#fff",
-    borderRadius: 15,
-    padding: 15,
-    marginBottom: 15,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    elevation: 3,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-  },
-  // Past trips recede so upcoming ones read as the active content.
-  tripCardPast: { opacity: 0.65 },
-  tripInfo: { flex: 1 },
-  tripCardTopRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 4,
-  },
-  locationText: {
-    fontSize: 12,
-    color: "#1E90FF",
-    fontWeight: "bold",
-  },
-  badge: {
-    backgroundColor: "#eef2ff",
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 10,
-    marginLeft: 8,
-  },
-  badgeText: { fontSize: 11, fontWeight: "bold", color: "#2f6deb" },
-  badgeOngoing: { backgroundColor: "#e6f7ed" },
-  badgeTextOngoing: { color: "#1a9e5c" },
-  sectionHeader: {
-    fontSize: 13,
-    fontWeight: "bold",
-    color: "#888",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginBottom: 10,
-    marginTop: 6,
-  },
-  emptyState: { alignItems: "center", marginTop: 50 },
-  emptyText: { fontSize: 17, fontWeight: "bold", color: "#8a97a5", marginTop: 12 },
-  emptySubText: { fontSize: 14, color: "#aab4bf", marginTop: 4, textAlign: "center" },
-  buttonDisabled: { opacity: 0.6 },
-  tripTitle: { fontSize: 18, fontWeight: "bold", color: "#333" },
-  dateText: { fontSize: 14, color: "#888", marginTop: 4 },
-  viewLink: { color: "#2f6deb", fontWeight: "bold" },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
-  },
-  // justifyContent here (not on the overlay) so the sheet stays centred
-  // while still being able to scroll when the keyboard shrinks the space.
-  modalScrollContent: {
-    flexGrow: 1,
-    justifyContent: "center",
-    padding: 20,
-  },
-  modalContent: {
-    backgroundColor: "#fff",
-    borderRadius: 20,
-    padding: 25,
-    elevation: 5,
-  },
-  modalTitle: {
-    fontSize: 22,
-    fontWeight: "bold",
-    marginBottom: 20,
-    textAlign: "center",
-  },
-  inputLabel: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#555",
-    marginBottom: 5,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 15,
-    fontSize: 16,
-  },
-  inputError: { borderColor: "#e53935" },
-  fieldErrorText: {
-    color: "#e53935",
-    fontSize: 12,
-    marginTop: -10,
-    marginBottom: 12,
-  },
-  dateRow: { flexDirection: "row", alignItems: "center" },
-  // flex so the two date buttons split the row evenly.
-  dateInput: { flex: 1, justifyContent: "center" },
-  dateSeparator: {
-    marginHorizontal: 8,
-    marginBottom: 15,
-    color: "#888",
-    fontSize: 16,
-  },
-  dateValueText: { fontSize: 16, color: "#1a1a1a" },
-  datePlaceholder: { fontSize: 16, color: "#aaa" },
-  modalButtons: { flexDirection: "row", justifyContent: "space-between" },
-  modalButton: {
-    flex: 1,
-    padding: 15,
-    borderRadius: 10,
-    alignItems: "center",
-    marginHorizontal: 5,
-  },
-  cancelButton: { backgroundColor: "#eee" },
-  saveButton: { backgroundColor: "#2f6deb" },
-  cancelButtonText: { color: "#666", fontWeight: "bold" },
-  saveButtonText: { color: "#fff", fontWeight: "bold" },
-  errorContainer: { alignItems: "center", marginTop: 40 },
-  errorText: { color: "#e53935", fontSize: 15, textAlign: "center", marginBottom: 16 },
-  retryButton: { backgroundColor: "#2f6deb", paddingHorizontal: 24, paddingVertical: 10, borderRadius: 10 },
-  retryButtonText: { color: "#fff", fontWeight: "bold" },
-  addErrorText: { color: "#e53935", fontSize: 13, textAlign: "center", marginBottom: 10 },
-});
+const makeStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+      padding: Spacing.xl,
+      paddingTop: 60,
+    },
+    title: {
+      fontSize: FontSize.h1,
+      fontFamily: FontFamily.bold,
+      color: colors.textPrimary,
+    },
+    subtitle: {
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.regular,
+      color: colors.textSecondary,
+      marginBottom: Spacing.xxl,
+    },
+    planButton: { marginBottom: Spacing.xl },
+    listContainer: { paddingBottom: Spacing.xl },
+
+    tripCard: {
+      backgroundColor: colors.surface,
+      borderRadius: Radius.lg,
+      padding: Spacing.lg,
+      marginBottom: Spacing.md,
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      ...Elevation.sm,
+    },
+    // Past trips recede so upcoming ones read as the active content.
+    tripCardPast: { opacity: 0.65 },
+    tripInfo: { flex: 1 },
+    tripCardTopRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      marginBottom: Spacing.xs,
+    },
+    locationText: {
+      fontSize: FontSize.tiny,
+      color: colors.primary,
+      fontFamily: FontFamily.bold,
+      letterSpacing: 0.4,
+    },
+    tripTitle: {
+      fontSize: FontSize.h3,
+      fontFamily: FontFamily.semibold,
+      color: colors.textPrimary,
+    },
+    dateText: {
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.regular,
+      color: colors.textSecondary,
+      marginTop: Spacing.xs,
+    },
+    badge: {
+      backgroundColor: colors.primarySoft,
+      paddingHorizontal: Spacing.sm,
+      paddingVertical: 3,
+      borderRadius: Radius.sm,
+      marginLeft: Spacing.sm,
+    },
+    badgeText: {
+      fontSize: FontSize.tiny,
+      fontFamily: FontFamily.bold,
+      color: colors.primary,
+    },
+    badgeOngoing: { backgroundColor: colors.successSoft },
+    badgeTextOngoing: { color: colors.success },
+    sectionHeader: {
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.bold,
+      color: colors.textMuted,
+      textTransform: "uppercase",
+      letterSpacing: 0.5,
+      marginBottom: Spacing.sm,
+      marginTop: Spacing.xs,
+    },
+
+    emptyState: { alignItems: "center", marginTop: 50 },
+    emptyText: {
+      fontSize: FontSize.h3,
+      fontFamily: FontFamily.semibold,
+      color: colors.textMuted,
+      marginTop: Spacing.md,
+    },
+    emptySubText: {
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.regular,
+      color: colors.textDisabled,
+      marginTop: Spacing.xs,
+      textAlign: "center",
+    },
+
+    modalOverlay: { flex: 1, backgroundColor: colors.overlay },
+    // justifyContent here (not on the overlay) so the sheet stays centred
+    // while still being able to scroll when the keyboard shrinks the space.
+    modalScrollContent: {
+      flexGrow: 1,
+      justifyContent: "center",
+      padding: Spacing.xl,
+    },
+    modalContent: {
+      backgroundColor: colors.surface,
+      borderRadius: Radius.xl,
+      padding: Spacing.xxl,
+      ...Elevation.lg,
+    },
+    modalTitle: {
+      fontSize: FontSize.h2,
+      fontFamily: FontFamily.bold,
+      marginBottom: Spacing.xl,
+      textAlign: "center",
+      color: colors.textPrimary,
+    },
+    dateTrigger: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+    },
+    dateValueText: {
+      fontSize: FontSize.body,
+      fontFamily: FontFamily.regular,
+      color: colors.textPrimary,
+    },
+    datePlaceholder: {
+      fontSize: FontSize.body,
+      fontFamily: FontFamily.regular,
+      color: colors.textDisabled,
+    },
+    modalButtons: { flexDirection: "row", gap: Spacing.md },
+    modalButton: { flex: 1 },
+
+    errorContainer: { alignItems: "center", marginTop: 40 },
+    errorText: {
+      color: colors.danger,
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.regular,
+      textAlign: "center",
+      marginBottom: Spacing.lg,
+    },
+    addErrorText: {
+      color: colors.danger,
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.regular,
+      textAlign: "center",
+      marginBottom: Spacing.md,
+    },
+  });

@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -21,6 +21,16 @@ import {
 import { GooglePlacesAutocomplete } from "react-native-google-places-autocomplete";
 import DateTimePickerModal from "react-native-modal-datetime-picker";
 import MapView, { Marker } from "react-native-maps";
+import {
+  Elevation,
+  FontFamily,
+  FontSize,
+  Radius,
+  Spacing,
+  ThemeColors,
+} from "../constants/theme";
+import { DARK_MAP_STYLE } from "../constants/mapStyle";
+import { useTheme } from "../contexts/ThemeContext";
 import { apiFetch } from "../services/apiClient";
 import {
   LIMITS,
@@ -39,6 +49,9 @@ type EventFieldErrors = {
 
 export default function TripDetailsScreen() {
   const { id, title, location, date } = useLocalSearchParams();
+
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   const [viewMode, setViewMode] = useState<"itinerary" | "chat">("itinerary");
   const [loading, setLoading] = useState(true);
@@ -314,14 +327,14 @@ export default function TripDetailsScreen() {
         style={{ padding: 15 }}
         onPress={() => openEditModal(item)}
       >
-        <Ionicons name="pencil-outline" size={20} color="#2f6deb" />
+        <Ionicons name="pencil-outline" size={20} color={colors.primary} />
       </TouchableOpacity>
       {/* Delete icon button on the right side of the card */}
       <TouchableOpacity
         style={styles.deleteIconButton}
         onPress={() => handleDeleteEvent(item.id)}
       >
-        <Ionicons name="trash-outline" size={20} color="#ff4d4d" />
+        <Ionicons name="trash-outline" size={20} color={colors.danger} />
       </TouchableOpacity>
     </View>
   );
@@ -382,7 +395,7 @@ export default function TripDetailsScreen() {
                   <Ionicons
                     name={isMapView ? "list" : "map"}
                     size={20}
-                    color="#2f6deb"
+                    color={colors.primary}
                   />
                 </TouchableOpacity>
 
@@ -390,7 +403,7 @@ export default function TripDetailsScreen() {
                   style={styles.addButton}
                   onPress={() => setIsModalVisible(true)}
                 >
-                  <Ionicons name="add" size={20} color="#fff" />
+                  <Ionicons name="add" size={20} color={colors.primaryContrast} />
                   <Text style={styles.addButtonText}>Add Event</Text>
                 </TouchableOpacity>
               </View>
@@ -399,13 +412,15 @@ export default function TripDetailsScreen() {
             {loading ? (
               <ActivityIndicator
                 size="large"
-                color="#2f6deb"
+                color={colors.primary}
                 style={{ marginTop: 50 }}
               />
             ) : isMapView ? (
               <View style={styles.mapContainer}>
                 <MapView
                   style={styles.map}
+                  // Google Maps does not follow the app theme by itself.
+                  customMapStyle={isDark ? DARK_MAP_STYLE : []}
                   // Clear selection when tapping anywhere else on the map
                   onPress={() => setSelectedEvent(null)}
                   initialRegion={{
@@ -467,7 +482,7 @@ export default function TripDetailsScreen() {
                         )
                       }
                     >
-                      <Ionicons name="navigate" size={18} color="#fff" />
+                      <Ionicons name="navigate" size={18} color={colors.primaryContrast} />
                       <Text style={styles.navigateButtonText}>Navigate</Text>
                     </TouchableOpacity>
                   </View>
@@ -481,10 +496,10 @@ export default function TripDetailsScreen() {
                 contentContainerStyle={styles.listPadding}
                 ListEmptyComponent={
                   <View style={styles.emptyState}>
-                    <Ionicons name="calendar-outline" size={48} color="#ccc" />
+                    <Ionicons name="calendar-outline" size={48} color={colors.textDisabled} />
                     <Text style={styles.emptyText}>No events yet.</Text>
                     <Text style={styles.emptySubText}>
-                      Tap "Add Event" to plan your day.
+                      Tap “Add Event” to plan your day.
                     </Text>
                   </View>
                 }
@@ -518,6 +533,9 @@ export default function TripDetailsScreen() {
                       <GooglePlacesAutocomplete
                         ref={googlePlacesRef}
                         placeholder="e.g. Piazza del Colosseo"
+                        textInputProps={{
+                          placeholderTextColor: colors.textDisabled,
+                        }}
                         // Keep the list open even when user taps outside to dismiss keyboard
                         keepResultsAfterBlur={true}
                         // Fetch full details including geometry for the coordinates
@@ -560,13 +578,16 @@ export default function TripDetailsScreen() {
                             top: 50,
                             zIndex: 1000,
                             elevation: 10,
-                            backgroundColor: "#fff",
+                            backgroundColor: colors.surface,
                             borderRadius: 10,
                             shadowColor: "#000",
                             shadowOpacity: 0.1,
                             shadowRadius: 4,
                             shadowOffset: { width: 0, height: 2 },
                           },
+                          row: { backgroundColor: colors.surface },
+                          description: { color: colors.textPrimary },
+                          separator: { backgroundColor: colors.border },
                         }}
                         enablePoweredByContainer={false}
                       />
@@ -613,10 +634,9 @@ export default function TripDetailsScreen() {
                       accessibilityLabel="Choose activity time"
                     >
                       <Text
-                        style={{
-                          color: newTime ? "#1a1a1a" : "#aaa",
-                          fontSize: 15,
-                        }}
+                        style={
+                          newTime ? styles.timeValue : styles.timePlaceholder
+                        }
                       >
                         {newTime ? newTime : "Select time"}
                       </Text>
@@ -683,7 +703,7 @@ export default function TripDetailsScreen() {
                         disabled={isSubmitting}
                       >
                         {isSubmitting ? (
-                          <ActivityIndicator size="small" color="#fff" />
+                          <ActivityIndicator size="small" color={colors.primaryContrast} />
                         ) : (
                           <Text style={styles.saveButtonText}>
                             {editingEventId ? "Save Changes" : "Create"}
@@ -701,7 +721,7 @@ export default function TripDetailsScreen() {
               style={styles.fab}
               onPress={() => setViewMode("chat")}
             >
-              <Ionicons name="chatbubble-ellipses" size={30} color="#fff" />
+              <Ionicons name="chatbubble-ellipses" size={30} color={colors.primaryContrast} />
             </TouchableOpacity>
           </View>
         ) : (
@@ -744,7 +764,7 @@ export default function TripDetailsScreen() {
                       styles.typingBubble,
                     ]}
                   >
-                    <ActivityIndicator size="small" color="#2f6deb" />
+                    <ActivityIndicator size="small" color={colors.primary} />
                     <Text style={styles.typingText}>Traveleria AI is typing…</Text>
                   </View>
                 ) : null
@@ -779,303 +799,358 @@ export default function TripDetailsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: "#2f6deb" },
-  container: { flex: 1, backgroundColor: "#f4f6f8" },
-  header: { padding: 20, backgroundColor: "#2f6deb", paddingBottom: 20 },
-  locationTag: {
-    color: "#fff",
-    fontSize: 12,
-    fontWeight: "bold",
-    opacity: 0.8,
-  },
-  title: { color: "#fff", fontSize: 24, fontWeight: "bold", marginTop: 5 },
+const makeStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    safeArea: { flex: 1, backgroundColor: colors.primary },
+    container: { flex: 1, backgroundColor: colors.background },
+    header: {
+      padding: Spacing.xl,
+      backgroundColor: colors.primary,
+      paddingBottom: Spacing.xl,
+    },
+    locationTag: {
+      color: colors.primaryContrast,
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.bold,
+      opacity: 0.85,
+      letterSpacing: 0.4,
+    },
+    title: {
+      color: colors.primaryContrast,
+      fontSize: FontSize.h2,
+      fontFamily: FontFamily.bold,
+      marginTop: Spacing.xs + 1,
+    },
 
-  // Section header
-  listPadding: { padding: 20, paddingBottom: 100 },
-  sectionHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 16,
-  },
-  sectionTitle: { fontSize: 20, fontWeight: "bold", color: "#333" },
-  addButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#2f6deb",
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-    gap: 4,
-  },
-  addButtonText: { color: "#fff", fontWeight: "bold", fontSize: 14 },
+    listPadding: { padding: Spacing.xl, paddingBottom: 100 },
+    sectionHeader: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: Spacing.lg,
+    },
+    sectionTitle: {
+      fontSize: FontSize.h3,
+      fontFamily: FontFamily.semibold,
+      color: colors.textPrimary,
+    },
+    addButton: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: colors.primary,
+      paddingHorizontal: Spacing.lg,
+      paddingVertical: Spacing.sm,
+      borderRadius: Radius.xl,
+      gap: Spacing.xs,
+    },
+    addButtonText: {
+      color: colors.primaryContrast,
+      fontFamily: FontFamily.semibold,
+      fontSize: FontSize.small,
+    },
 
-  // Event cards
-  eventCard: {
-    flexDirection: "row",
-    backgroundColor: "#fff",
-    borderRadius: 14,
-    marginBottom: 12,
-    alignItems: "center",
-    elevation: 3,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    overflow: "hidden",
-  },
-  eventTimeBlock: {
-    backgroundColor: "#eef2ff",
-    paddingHorizontal: 14,
-    paddingVertical: 20,
-    alignItems: "center",
-    justifyContent: "center",
-    minWidth: 70,
-  },
-  eventTime: { fontSize: 15, fontWeight: "bold", color: "#2f6deb" },
-  eventDivider: { width: 1, height: "100%", backgroundColor: "#e8e8e8" },
-  eventInfo: { flex: 1, paddingHorizontal: 16, paddingVertical: 14 },
-  eventActivity: { fontSize: 16, fontWeight: "bold", color: "#1a1a1a" },
-  eventPlace: { fontSize: 13, color: "#888", marginTop: 3 },
+    eventCard: {
+      flexDirection: "row",
+      backgroundColor: colors.surface,
+      borderRadius: Radius.lg,
+      marginBottom: Spacing.md,
+      alignItems: "center",
+      ...Elevation.sm,
+      overflow: "hidden",
+    },
+    eventTimeBlock: {
+      backgroundColor: colors.primarySoft,
+      paddingHorizontal: Spacing.lg,
+      paddingVertical: Spacing.xl,
+      alignItems: "center",
+      justifyContent: "center",
+      minWidth: 70,
+    },
+    eventTime: {
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.bold,
+      color: colors.primary,
+    },
+    eventDivider: { width: 1, height: "100%", backgroundColor: colors.border },
+    eventInfo: {
+      flex: 1,
+      paddingHorizontal: Spacing.lg,
+      paddingVertical: Spacing.lg,
+    },
+    eventActivity: {
+      fontSize: FontSize.body,
+      fontFamily: FontFamily.semibold,
+      color: colors.textPrimary,
+    },
+    eventPlace: {
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.regular,
+      color: colors.textMuted,
+      marginTop: 3,
+    },
 
-  // Empty state
-  emptyState: { alignItems: "center", marginTop: 60 },
-  emptyText: { fontSize: 17, fontWeight: "bold", color: "#aaa", marginTop: 12 },
-  emptySubText: { fontSize: 14, color: "#bbb", marginTop: 4 },
+    emptyState: { alignItems: "center", marginTop: 60 },
+    emptyText: {
+      fontSize: FontSize.h3,
+      fontFamily: FontFamily.semibold,
+      color: colors.textMuted,
+      marginTop: Spacing.md,
+    },
+    emptySubText: {
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.regular,
+      color: colors.textDisabled,
+      marginTop: Spacing.xs,
+    },
 
-  // Modal
-  modalOverlay: {
-    flex: 1,
-    // Align the modal content to the top
-    justifyContent: "flex-start",
-    // Add space to clear the status bar and notch
-    paddingTop: 60,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    paddingHorizontal: 20,
-  },
-  modalContent: {
-    backgroundColor: "#fff",
-    borderRadius: 20,
-    padding: 25,
-    elevation: 5,
-    // Ensure the modal content allows the dropdown to float above
-    zIndex: 1,
-  },
-  modalTitle: {
-    fontSize: 22,
-    fontWeight: "bold",
-    marginBottom: 20,
-    textAlign: "center",
-    color: "#1a1a1a",
-  },
-  inputLabel: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#555",
-    marginBottom: 5,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: "#e0e0e0",
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 14,
-    fontSize: 15,
-    backgroundColor: "#fafafa",
-  },
-  inputError: { borderColor: "#e53935" },
-  fieldErrorText: {
-    color: "#e53935",
-    fontSize: 12,
-    // Pulls the message up against the field it belongs to.
-    marginTop: -10,
-    marginBottom: 12,
-  },
-  modalButtons: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 4,
-  },
-  modalButton: {
-    flex: 1,
-    padding: 15,
-    borderRadius: 10,
-    alignItems: "center",
-    marginHorizontal: 5,
-  },
-  cancelButton: { backgroundColor: "#eee" },
-  saveButton: { backgroundColor: "#2f6deb" },
-  cancelButtonText: { color: "#666", fontWeight: "bold" },
-  saveButtonText: { color: "#fff", fontWeight: "bold" },
+    modalOverlay: {
+      flex: 1,
+      justifyContent: "flex-start",
+      paddingTop: 60,
+      backgroundColor: colors.overlay,
+      paddingHorizontal: Spacing.xl,
+    },
+    modalContent: {
+      backgroundColor: colors.surface,
+      borderRadius: Radius.xl,
+      padding: Spacing.xxl,
+      ...Elevation.lg,
+      zIndex: 1,
+    },
+    modalTitle: {
+      fontSize: FontSize.h2,
+      fontFamily: FontFamily.bold,
+      marginBottom: Spacing.xl,
+      textAlign: "center",
+      color: colors.textPrimary,
+    },
+    inputLabel: {
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.semibold,
+      color: colors.textSecondary,
+      marginBottom: Spacing.xs + 1,
+    },
+    input: {
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: Radius.md,
+      padding: Spacing.md,
+      marginBottom: Spacing.lg,
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.regular,
+      color: colors.textPrimary,
+      backgroundColor: colors.surfaceSunken,
+    },
+    inputError: { borderColor: colors.danger },
+    fieldErrorText: {
+      color: colors.danger,
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.regular,
+      // Pulls the message up against the field it belongs to.
+      marginTop: -Spacing.md,
+      marginBottom: Spacing.md,
+    },
+    timeValue: {
+      color: colors.textPrimary,
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.regular,
+    },
+    timePlaceholder: {
+      color: colors.textDisabled,
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.regular,
+    },
+    modalButtons: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      marginTop: Spacing.xs,
+    },
+    modalButton: {
+      flex: 1,
+      padding: Spacing.lg,
+      borderRadius: Radius.md,
+      alignItems: "center",
+      marginHorizontal: Spacing.xs + 1,
+    },
+    cancelButton: { backgroundColor: colors.surfaceAlt },
+    saveButton: { backgroundColor: colors.primary },
+    cancelButtonText: {
+      color: colors.textSecondary,
+      fontFamily: FontFamily.semibold,
+    },
+    saveButtonText: {
+      color: colors.primaryContrast,
+      fontFamily: FontFamily.semibold,
+    },
+    buttonDisabled: { opacity: 0.5 },
 
-  // FAB
-  fab: {
-    position: "absolute",
-    right: 20,
-    bottom: 30,
-    backgroundColor: "#2f6deb",
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    justifyContent: "center",
-    alignItems: "center",
-    elevation: 5,
-    shadowColor: "#000",
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
-    shadowOffset: { width: 0, height: 2 },
-  },
+    fab: {
+      position: "absolute",
+      right: Spacing.xl,
+      bottom: Spacing.xxxl,
+      backgroundColor: colors.primary,
+      width: 60,
+      height: 60,
+      borderRadius: 30,
+      justifyContent: "center",
+      alignItems: "center",
+      ...Elevation.lg,
+    },
 
-  // Chat
-  backButton: {
-    padding: 12,
-    backgroundColor: "#fff",
-    borderBottomWidth: 1,
-    borderBottomColor: "#eee",
-  },
-  backText: { color: "#2f6deb", fontWeight: "bold", fontSize: 14 },
-  chatList: { padding: 20 },
-  messageBubble: {
-    padding: 12,
-    borderRadius: 18,
-    marginBottom: 10,
-    maxWidth: "80%",
-  },
-  userBubble: {
-    alignSelf: "flex-end",
-    backgroundColor: "#2f6deb",
-    borderBottomRightRadius: 2,
-  },
-  aiBubble: {
-    alignSelf: "flex-start",
-    backgroundColor: "#fff",
-    borderBottomLeftRadius: 2,
-    elevation: 2,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-  },
-  messageText: { fontSize: 16 },
-  userText: { color: "#fff" },
-  aiText: { color: "#333" },
-  typingBubble: { flexDirection: "row", alignItems: "center", gap: 8 },
-  typingText: { fontSize: 14, color: "#888", fontStyle: "italic" },
-  buttonDisabled: { opacity: 0.5 },
-  inputContainer: {
-    flexDirection: "row",
-    paddingHorizontal: 15,
-    paddingTop: 10,
-    paddingBottom: Platform.OS === "ios" ? 35 : 15,
-    backgroundColor: "#fff",
-    borderTopWidth: 1,
-    borderTopColor: "#eee",
-    alignItems: "center",
-  },
-  chatInput: {
-    flex: 1,
-    height: 45,
-    backgroundColor: "#f0f2f5",
-    borderRadius: 22,
-    paddingHorizontal: 20,
-    marginRight: 10,
-    fontSize: 16,
-  },
-  deleteIconButton: {
-    padding: 15,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  sendButton: {
-    backgroundColor: "#2f6deb",
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 20,
-  },
-  sendButtonText: { color: "#fff", fontWeight: "bold" },
-  iconButton: {
-    padding: 8,
-    backgroundColor: "#eef2ff",
-    borderRadius: 20,
-    justifyContent: "center",
-    alignItems: "center",
-    width: 40,
-    height: 40,
-  },
-  mapContainer: {
-    flex: 1,
-    marginHorizontal: 20,
-    marginBottom: 100,
-    borderRadius: 20,
-    overflow: "hidden",
-    elevation: 4,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 5,
-  },
-  map: {
-    width: "100%",
-    height: "100%",
-  },
-  infoCard: {
-    position: "absolute",
-    bottom: 20,
-    left: 20,
-    right: 20,
-    backgroundColor: "#fff",
-    borderRadius: 15,
-    padding: 15,
-    elevation: 5,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 5,
-  },
-  infoCardHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 5,
-  },
-  infoCardTitle: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#1a1a1a",
-    flex: 1,
-  },
-  infoCardTime: {
-    fontSize: 14,
-    fontWeight: "bold",
-    color: "#2f6deb",
-    marginLeft: 10,
-  },
-  infoCardAddress: {
-    fontSize: 14,
-    color: "#666",
-  },
-  navigateButton: {
-    backgroundColor: "#2f6deb",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 10,
-    borderRadius: 10,
-    marginTop: 12,
-    gap: 8,
-  },
-  navigateButtonText: {
-    color: "#fff",
-    fontWeight: "bold",
-    fontSize: 14,
-  },
-  infoCardNotes: {
-    fontSize: 13,
-    color: "#444",
-    fontStyle: "italic",
-    marginTop: 8,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: "#f0f0f0",
-  },
-});
+    backButton: {
+      padding: Spacing.md,
+      backgroundColor: colors.surface,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    backText: {
+      color: colors.primary,
+      fontFamily: FontFamily.semibold,
+      fontSize: FontSize.small,
+    },
+    chatList: { padding: Spacing.xl },
+    messageBubble: {
+      padding: Spacing.md,
+      borderRadius: 18,
+      marginBottom: Spacing.md,
+      maxWidth: "80%",
+    },
+    userBubble: {
+      alignSelf: "flex-end",
+      backgroundColor: colors.primary,
+      borderBottomRightRadius: 2,
+    },
+    aiBubble: {
+      alignSelf: "flex-start",
+      backgroundColor: colors.surface,
+      borderBottomLeftRadius: 2,
+      ...Elevation.sm,
+    },
+    messageText: { fontSize: FontSize.body, fontFamily: FontFamily.regular },
+    userText: { color: colors.primaryContrast },
+    aiText: { color: colors.textPrimary },
+    typingBubble: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: Spacing.sm,
+    },
+    typingText: {
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.regular,
+      color: colors.textMuted,
+      fontStyle: "italic",
+    },
+    inputContainer: {
+      flexDirection: "row",
+      paddingHorizontal: Spacing.lg,
+      paddingTop: Spacing.md,
+      paddingBottom: Platform.OS === "ios" ? 35 : Spacing.lg,
+      backgroundColor: colors.surface,
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+      alignItems: "center",
+    },
+    chatInput: {
+      flex: 1,
+      height: 45,
+      backgroundColor: colors.surfaceSunken,
+      borderRadius: 22,
+      paddingHorizontal: Spacing.xl,
+      marginRight: Spacing.md,
+      fontSize: FontSize.body,
+      fontFamily: FontFamily.regular,
+      color: colors.textPrimary,
+    },
+    deleteIconButton: {
+      padding: Spacing.lg,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    sendButton: {
+      backgroundColor: colors.primary,
+      paddingVertical: Spacing.md,
+      paddingHorizontal: Spacing.xl,
+      borderRadius: Radius.xl,
+    },
+    sendButtonText: {
+      color: colors.primaryContrast,
+      fontFamily: FontFamily.semibold,
+    },
+    iconButton: {
+      padding: Spacing.sm,
+      backgroundColor: colors.primarySoft,
+      borderRadius: Radius.xl,
+      justifyContent: "center",
+      alignItems: "center",
+      width: 40,
+      height: 40,
+    },
+
+    mapContainer: {
+      flex: 1,
+      marginHorizontal: Spacing.xl,
+      marginBottom: 100,
+      borderRadius: Radius.xl,
+      overflow: "hidden",
+      ...Elevation.md,
+    },
+    map: { width: "100%", height: "100%" },
+    infoCard: {
+      position: "absolute",
+      bottom: Spacing.xl,
+      left: Spacing.xl,
+      right: Spacing.xl,
+      backgroundColor: colors.surface,
+      borderRadius: Radius.lg,
+      padding: Spacing.lg,
+      ...Elevation.lg,
+    },
+    infoCardHeader: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: Spacing.xs + 1,
+    },
+    infoCardTitle: {
+      fontSize: FontSize.h3,
+      fontFamily: FontFamily.semibold,
+      color: colors.textPrimary,
+      flex: 1,
+    },
+    infoCardTime: {
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.bold,
+      color: colors.primary,
+      marginLeft: Spacing.md,
+    },
+    infoCardAddress: {
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.regular,
+      color: colors.textSecondary,
+    },
+    navigateButton: {
+      backgroundColor: colors.primary,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      paddingVertical: Spacing.md,
+      borderRadius: Radius.md,
+      marginTop: Spacing.md,
+      gap: Spacing.sm,
+    },
+    navigateButtonText: {
+      color: colors.primaryContrast,
+      fontFamily: FontFamily.semibold,
+      fontSize: FontSize.small,
+    },
+    infoCardNotes: {
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.regular,
+      color: colors.textSecondary,
+      fontStyle: "italic",
+      marginTop: Spacing.sm,
+      paddingTop: Spacing.sm,
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+    },
+  });

@@ -1,25 +1,35 @@
-// 1. Imports
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
-  ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
   Platform,
   SafeAreaView,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
 
-// Add confirmUser to the existing import
+import { AppButton } from "../components/AppButton";
+import { FormField } from "../components/FormField";
+import {
+  FontFamily,
+  FontSize,
+  Spacing,
+  ThemeColors,
+} from "../constants/theme";
+import { useThemeColors } from "../contexts/ThemeContext";
 import { confirmUser, registerUser } from "../services/authService";
 
 export default function SignupScreen() {
   const router = useRouter();
+
+  const colors = useThemeColors();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   // Return to the login screen. Falls back to a direct navigation when there is
   // no history to pop — e.g. if signup was opened as the app's first screen.
@@ -30,6 +40,7 @@ export default function SignupScreen() {
       router.replace("/");
     }
   };
+
   const [verificationCode, setVerificationCode] = useState("");
   // State for form inputs
   const [firstName, setFirstName] = useState("");
@@ -160,7 +171,7 @@ export default function SignupScreen() {
         accessibilityRole="button"
         accessibilityLabel="Back to log in"
       >
-        <Ionicons name="chevron-back" size={26} color="#2063e0" />
+        <Ionicons name="chevron-back" size={26} color={colors.primary} />
         <Text style={styles.backButtonText}>Log In</Text>
       </TouchableOpacity>
     </View>
@@ -177,8 +188,8 @@ export default function SignupScreen() {
             your account.
           </Text>
 
-          <TextInput
-            style={styles.input}
+          <FormField
+            label="Verification code"
             placeholder="6-Digit Code"
             value={verificationCode}
             onChangeText={setVerificationCode}
@@ -186,29 +197,19 @@ export default function SignupScreen() {
             maxLength={6} // Limits input to 6 characters
           />
 
-          <TouchableOpacity
-            style={[styles.button, isSubmitting && styles.buttonDisabled]}
+          <AppButton
+            label="Verify Account"
             onPress={handleVerify}
-            disabled={isSubmitting}
-          >
-            {isSubmitting ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <Text style={styles.buttonText}>Verify Account</Text>
-            )}
-          </TouchableOpacity>
+            loading={isSubmitting}
+          />
 
-          <TouchableOpacity
-            style={[
-              styles.button,
-              { backgroundColor: "transparent", marginTop: 15 },
-            ]}
+          <AppButton
+            label="Cancel and Go Back"
+            variant="ghost"
             onPress={goBackToLogin}
-          >
-            <Text style={[styles.buttonText, { color: "#007AFF" }]}>
-              Cancel and Go Back
-            </Text>
-          </TouchableOpacity>
+            disabled={isSubmitting}
+            style={styles.secondaryAction}
+          />
         </View>
       </SafeAreaView>
     );
@@ -217,112 +218,116 @@ export default function SignupScreen() {
   return (
     <SafeAreaView style={styles.safeArea}>
       {renderBackBar()}
-      <View style={styles.container}>
-        <Text style={styles.title}>Sign Up</Text>
-
-        <TextInput
-          style={styles.input}
-          placeholder="First Name"
-          value={firstName}
-          onChangeText={setFirstName}
-        />
-
-        <TextInput
-          style={styles.input}
-          placeholder="Email"
-          value={email}
-          onChangeText={setEmail}
-          keyboardType="email-address"
-          autoCapitalize="none"
-        />
-
-        <TextInput
-          style={styles.input}
-          placeholder="Password"
-          value={password}
-          onChangeText={setPassword}
-          secureTextEntry={true}
-        />
-
-        <TouchableOpacity
-          style={[styles.button, isSubmitting && styles.buttonDisabled]}
-          onPress={handleSignup}
-          disabled={isSubmitting}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={styles.flex}
+      >
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
         >
-          {isSubmitting ? (
-            <ActivityIndicator size="small" color="#fff" />
-          ) : (
-            <Text style={styles.buttonText}>Create Account</Text>
-          )}
-        </TouchableOpacity>
-      </View>
+          <Text style={styles.title}>Sign Up</Text>
+
+          <FormField
+            label="First name"
+            placeholder="Your first name"
+            value={firstName}
+            onChangeText={setFirstName}
+            autoComplete="given-name"
+          />
+
+          <FormField
+            label="Email"
+            placeholder="name@example.com"
+            value={email}
+            onChangeText={setEmail}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoComplete="email"
+          />
+
+          <FormField
+            label="Password"
+            placeholder="Create a password"
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry={true}
+            autoComplete="new-password"
+          />
+          {/* Stating the rules up front beats failing the user after submit. */}
+          <Text style={styles.hint}>
+            At least 8 characters, with an uppercase and lowercase letter, a
+            number and a special character.
+          </Text>
+
+          <AppButton
+            label="Create Account"
+            onPress={handleSignup}
+            loading={isSubmitting}
+          />
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: "#ffffff" },
-  headerBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    // SafeAreaView only insets on iOS, so clear Android's status bar manually.
-    paddingTop:
-      Platform.OS === "android" ? (StatusBar.currentHeight ?? 0) + 8 : 8,
-  },
-  backButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 6,
-    paddingRight: 12,
-  },
-  backButtonText: {
-    color: "#2063e0",
-    fontSize: 17,
-    fontWeight: "600",
-    marginLeft: -4,
-  },
-  container: {
-    flex: 1,
-    justifyContent: "center",
-    padding: 25,
-    backgroundColor: "#ffffff",
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: "bold",
-    marginBottom: 25,
-    textAlign: "center",
-    color: "#333",
-  },
-  message: {
-    fontSize: 16,
-    textAlign: "center",
-    marginBottom: 35,
-    color: "#666",
-    lineHeight: 24,
-  },
-  input: {
-    height: 55,
-    borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 10,
-    paddingHorizontal: 15,
-    marginBottom: 20,
-    fontSize: 16,
-  },
-  button: {
-    backgroundColor: "#2063e0",
-    padding: 16,
-    borderRadius: 10,
-    alignItems: "center",
-    marginTop: 10,
-  },
-  buttonText: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "600",
-  },
-  buttonDisabled: { opacity: 0.6 },
-});
+const makeStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    safeArea: { flex: 1, backgroundColor: colors.background },
+    flex: { flex: 1 },
+    headerBar: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: Spacing.md,
+      paddingBottom: Spacing.sm,
+      // SafeAreaView only insets on iOS, so clear Android's status bar manually.
+      paddingTop:
+        Platform.OS === "android" ? (StatusBar.currentHeight ?? 0) + 8 : 8,
+    },
+    backButton: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingVertical: Spacing.xs + 2,
+      paddingRight: Spacing.md,
+    },
+    backButtonText: {
+      color: colors.primary,
+      fontSize: FontSize.body,
+      fontFamily: FontFamily.semibold,
+      marginLeft: -4,
+    },
+    container: {
+      flex: 1,
+      justifyContent: "center",
+      padding: Spacing.xxl,
+    },
+    scrollContent: {
+      flexGrow: 1,
+      justifyContent: "center",
+      padding: Spacing.xxl,
+    },
+    title: {
+      fontSize: FontSize.h1,
+      fontFamily: FontFamily.bold,
+      marginBottom: Spacing.xxl,
+      textAlign: "center",
+      color: colors.textPrimary,
+    },
+    message: {
+      fontSize: FontSize.body,
+      fontFamily: FontFamily.regular,
+      textAlign: "center",
+      marginBottom: Spacing.xxxl,
+      color: colors.textSecondary,
+      lineHeight: 24,
+    },
+    hint: {
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.regular,
+      color: colors.textMuted,
+      marginTop: -Spacing.sm,
+      marginBottom: Spacing.xl,
+      lineHeight: 17,
+    },
+    secondaryAction: { marginTop: Spacing.md },
+  });

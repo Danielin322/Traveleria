@@ -1,28 +1,40 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    KeyboardAvoidingView,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
 } from "react-native";
+
+import { AppButton } from "../components/AppButton";
+import { FormField } from "../components/FormField";
+import {
+  FontFamily,
+  FontSize,
+  Spacing,
+  ThemeColors,
+} from "../constants/theme";
+import { useThemeColors } from "../contexts/ThemeContext";
 import { apiFetch } from "../services/apiClient";
 
 export default function EditProfileScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
 
+  const colors = useThemeColors();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+
   const [name, setName] = useState((params.fullName as string) || "");
   const [country, setCountry] = useState((params.country as string) || "");
   const [language, setLanguage] = useState((params.language as string) || "");
   const [age, setAge] = useState((params.age as string) || "");
-  const [interests, setInterests] = useState((params.interests as string) || "");
+  const [interests, setInterests] = useState(
+    (params.interests as string) || "",
+  );
   // Prevents a double tap sending two PATCH requests.
   const [isSaving, setIsSaving] = useState(false);
 
@@ -59,107 +71,81 @@ export default function EditProfileScreen() {
       behavior={Platform.OS === "ios" ? "padding" : "height"}
       style={styles.container}
     >
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+      >
         <Text style={styles.headerTitle}>Edit Profile</Text>
 
-        <View style={styles.inputGroup}>
-          <Text style={styles.label}>Full Name</Text>
-          <TextInput style={styles.input} value={name} onChangeText={setName} />
-        </View>
+        <FormField
+          label="Full Name"
+          value={name}
+          onChangeText={setName}
+          placeholder="Your name"
+        />
 
-        <View style={styles.inputGroup}>
-          <Text style={styles.label}>Country</Text>
-          <TextInput
-            style={styles.input}
-            value={country}
-            onChangeText={setCountry}
-          />
-        </View>
+        <FormField
+          label="Country"
+          value={country}
+          onChangeText={setCountry}
+          placeholder="e.g. Israel"
+        />
 
-        <View style={styles.inputGroup}>
-          <Text style={styles.label}>Languages</Text>
-          <TextInput
-            style={styles.input}
-            value={language}
-            onChangeText={setLanguage}
-          />
-        </View>
+        <FormField
+          label="Languages"
+          value={language}
+          onChangeText={setLanguage}
+          placeholder="e.g. English, Hebrew"
+        />
 
-        <View style={styles.inputGroup}>
-          <Text style={styles.label}>Age</Text>
-          <TextInput
-            style={styles.input}
-            value={age}
-            onChangeText={setAge}
-            keyboardType="numeric"
-          />
-        </View>
+        <FormField
+          label="Age"
+          value={age}
+          onChangeText={setAge}
+          keyboardType="numeric"
+          placeholder="e.g. 28"
+          maxLength={3}
+        />
 
-        <View style={styles.inputGroup}>
-          <Text style={styles.label}>Interests (separated by commas)</Text>
-          <TextInput
-            style={[styles.input, styles.textArea]}
-            value={interests}
-            onChangeText={setInterests}
-            multiline
-            placeholder="e.g. Shopping, Hiking, Art"
-          />
-        </View>
+        <FormField
+          label="Interests (separated by commas)"
+          value={interests}
+          onChangeText={setInterests}
+          multiline
+          placeholder="e.g. Shopping, Hiking, Art"
+          style={styles.textArea}
+        />
 
         <View style={styles.buttonContainer}>
-          <TouchableOpacity
-            style={[styles.saveButton, isSaving && styles.buttonDisabled]}
+          <AppButton
+            label="Save Changes"
             onPress={handleSave}
-            disabled={isSaving}
-          >
-            {isSaving ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <Text style={styles.saveButtonText}>Save Changes</Text>
-            )}
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.cancelButton}
+            loading={isSaving}
+          />
+          <AppButton
+            label="Cancel"
+            variant="ghost"
             onPress={() => router.back()}
             disabled={isSaving}
-          >
-            <Text style={styles.cancelButtonText}>Cancel</Text>
-          </TouchableOpacity>
+            style={styles.cancel}
+          />
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff" },
-  scrollContent: { padding: 25, paddingTop: 60 },
-  headerTitle: {
-    fontSize: 28,
-    fontWeight: "bold",
-    marginBottom: 30,
-    color: "#1a1a1a",
-  },
-  inputGroup: { marginBottom: 20 },
-  label: { fontSize: 14, fontWeight: "600", color: "#666", marginBottom: 8 },
-  input: {
-    backgroundColor: "#f0f2f5",
-    borderRadius: 12,
-    padding: 15,
-    fontSize: 16,
-    color: "#333",
-  },
-  textArea: { height: 100, textAlignVertical: "top" },
-  buttonContainer: { marginTop: 30 },
-  saveButton: {
-    backgroundColor: "#2f6deb",
-    padding: 18,
-    borderRadius: 12,
-    alignItems: "center",
-    marginBottom: 12,
-  },
-  saveButtonText: { color: "#fff", fontSize: 16, fontWeight: "bold" },
-  buttonDisabled: { opacity: 0.6 },
-  cancelButton: { padding: 18, alignItems: "center" },
-  cancelButtonText: { color: "#666", fontSize: 16 },
-});
+const makeStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    scrollContent: { padding: Spacing.xxl, paddingTop: 60 },
+    headerTitle: {
+      fontSize: FontSize.h1,
+      fontFamily: FontFamily.bold,
+      marginBottom: Spacing.xxxl,
+      color: colors.textPrimary,
+    },
+    textArea: { height: 100, textAlignVertical: "top" },
+    buttonContainer: { marginTop: Spacing.xl },
+    cancel: { marginTop: Spacing.sm },
+  });

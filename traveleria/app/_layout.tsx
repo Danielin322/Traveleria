@@ -15,7 +15,6 @@ import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
 
 import awsConfig from "../config/awsConfig";
-import { Colors } from "../constants/theme";
 import { CurrentUserProvider } from "../contexts/CurrentUserContext";
 import { ThemeProvider, useTheme } from "../contexts/ThemeContext";
 
