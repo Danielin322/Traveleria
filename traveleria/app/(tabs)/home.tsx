@@ -244,20 +244,58 @@ export default function HomeScreen() {
   const toggleSelectAll = () =>
     setSelectedIds(allSelected ? new Set() : new Set(trips.map((t) => t.id)));
 
-  /** Deletes the given ids, returns the ones that failed. */
+  /**
+   * Deletes the given ids and returns the failures, each with the server's
+   * own explanation. Reporting "could not be removed" without a reason makes
+   * a misconfigured backend look like a broken button.
+   */
   const deleteTrips = async (ids: string[]) => {
     const results = await Promise.allSettled(
       ids.map((tripId) => apiFetch(`/trips/${tripId}`, { method: "DELETE" })),
     );
-    const deleted = new Set(
-      ids.filter(
-        (_, i) =>
-          results[i].status === "fulfilled" &&
-          (results[i] as PromiseFulfilledResult<Response>).value.ok,
-      ),
-    );
+
+    const deleted = new Set<string>();
+    const failures: { id: string; reason: string }[] = [];
+
+    for (let i = 0; i < ids.length; i++) {
+      const result = results[i];
+
+      if (result.status === "rejected") {
+        failures.push({ id: ids[i], reason: "Could not reach the server." });
+        continue;
+      }
+
+      const response = result.value;
+      if (response.ok) {
+        deleted.add(ids[i]);
+        continue;
+      }
+
+      let detail = "";
+      try {
+        const body = await response.json();
+        detail = body?.detail || body?.error || body?.message || "";
+      } catch {
+        // Non-JSON error body; fall back to the status alone.
+      }
+
+      // API Gateway answers an unrouted path with 403 "Missing Authentication
+      // Token", which reads as an auth problem and is not one. Say what it
+      // actually means.
+      if (response.status === 403 && /missing authentication token/i.test(detail)) {
+        detail = "This route is not deployed on the API yet.";
+      }
+
+      failures.push({
+        id: ids[i],
+        reason: detail
+          ? `${detail} (HTTP ${response.status})`
+          : `The server returned HTTP ${response.status}.`,
+      });
+    }
+
     setTrips((prev) => prev.filter((t) => !deleted.has(t.id)));
-    return ids.filter((tripId) => !deleted.has(tripId));
+    return failures;
   };
 
   /**
@@ -280,7 +318,7 @@ export default function HomeScreen() {
             try {
               const failed = await deleteTrips([trip.id]);
               if (failed.length > 0) {
-                Alert.alert("Could not delete", "Please try again.");
+                Alert.alert("Could not delete trip", failed[0].reason);
               }
             } catch (err) {
               console.error("Error deleting trip:", err);
@@ -316,10 +354,17 @@ export default function HomeScreen() {
               const failed = await deleteTrips(ids);
               if (failed.length > 0) {
                 // Keep failures ticked so a retry is one tap.
-                setSelectedIds(new Set(failed));
+                setSelectedIds(new Set(failed.map((f) => f.id)));
+                // Lead with why. When every failure shares a cause — which is
+                // usually the case — one reason explains the whole batch.
+                const reasons = [...new Set(failed.map((f) => f.reason))];
                 Alert.alert(
-                  "Some trips were not deleted",
-                  `${failed.length} of ${ids.length} could not be removed. They are still selected — tap delete to try again.`,
+                  failed.length === ids.length
+                    ? "Could not delete"
+                    : "Some trips were not deleted",
+                  reasons.length === 1
+                    ? reasons[0]
+                    : `${failed.length} of ${ids.length} failed:\n\n${reasons.join("\n")}`,
                 );
               } else {
                 exitSelection();
