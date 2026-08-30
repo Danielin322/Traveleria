@@ -11,6 +11,7 @@ import {
   Modal,
   Platform,
   SafeAreaView,
+  SectionList,
   StyleSheet,
   Text,
   TextInput,
@@ -19,7 +20,6 @@ import {
   View,
 } from "react-native";
 import { GooglePlacesAutocomplete } from "react-native-google-places-autocomplete";
-import DateTimePickerModal from "react-native-modal-datetime-picker";
 import MapView, { Marker } from "react-native-maps";
 import {
   Elevation,
@@ -30,12 +30,15 @@ import {
   ThemeColors,
 } from "../constants/theme";
 import { DARK_MAP_STYLE } from "../constants/mapStyle";
+import { TripDayTimePicker } from "../components/TripDayTimePicker";
 import { useTheme } from "../contexts/ThemeContext";
 import { apiFetch } from "../services/apiClient";
+import { DaySection, groupEventsByDay, sortEvents } from "../utils/itinerary";
 import {
   LIMITS,
-  formatTime,
-  parseTime,
+  formatDate,
+  parseDate,
+  parseDateRange,
   validateActivity,
   validateNotes,
 } from "../utils/validation";
@@ -43,7 +46,7 @@ import {
 type EventFieldErrors = {
   place?: string;
   activity?: string;
-  time?: string;
+  when?: string;
   notes?: string;
 };
 
@@ -68,8 +71,9 @@ export default function TripDetailsScreen() {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [newActivity, setNewActivity] = useState("");
   const [newTime, setNewTime] = useState("");
+  const [newDate, setNewDate] = useState<Date | null>(null);
   const [newPlace, setNewPlace] = useState("");
-  const [isTimePickerVisible, setTimePickerVisible] = useState(false);
+  const [isWhenPickerVisible, setWhenPickerVisible] = useState(false);
   const [newLat, setNewLat] = useState<number | null>(null);
   const [newLng, setNewLng] = useState<number | null>(null);
   const [isMapView, setIsMapView] = useState(false);
@@ -80,12 +84,28 @@ export default function TripDetailsScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   // Drives the "typing" bubble while the assistant composes a reply.
   const [isAiTyping, setIsAiTyping] = useState(false);
+  // Bulk edit: tick several events, remove them in one action.
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const googlePlacesRef = useRef<any>(null);
 
-  const handleConfirmTime = (picked: Date) => {
-    setNewTime(formatTime(picked));
-    setFieldErrors((prev) => ({ ...prev, time: undefined }));
-    setTimePickerVisible(false);
+  /**
+   * The trip's own dates, which bound the day picker. Null when the screen was
+   * opened without the `date` param — then the calendar is simply unbounded
+   * rather than the screen refusing to work.
+   */
+  const tripRange = useMemo(
+    () => parseDateRange(String(date ?? "")),
+    [date],
+  );
+
+  /** Both halves of "when" arrive together, so they are set together. */
+  const handleConfirmWhen = (pickedDate: Date, pickedTime: string) => {
+    setNewDate(pickedDate);
+    setNewTime(pickedTime);
+    setFieldErrors((prev) => ({ ...prev, when: undefined }));
+    setWhenPickerVisible(false);
   };
 
   /** Clears one field's error as soon as the user starts correcting it. */
@@ -98,6 +118,7 @@ export default function TripDetailsScreen() {
     setEditingEventId(null);
     setNewActivity("");
     setNewTime("");
+    setNewDate(null);
     setNewPlace("");
     setNewLat(null);
     setNewLng(null);
@@ -106,14 +127,11 @@ export default function TripDetailsScreen() {
     googlePlacesRef.current?.setAddressText("");
   };
 
-  const sortByTime = (items: any[]) =>
-    [...items].sort((a, b) => a.time.localeCompare(b.time));
-
   const fetchItinerary = async () => {
     try {
       const response = await apiFetch(`/trips/${id}/itinerary`);
       const data = await response.json();
-      setItinerary(sortByTime(data));
+      setItinerary(sortEvents(data));
     } catch (error) {
       console.error("Error fetching itinerary:", error);
     } finally {
@@ -140,18 +158,24 @@ export default function TripDetailsScreen() {
           ? "Pick a place from the suggestions so its location is saved."
           : undefined,
       activity: validateActivity(newActivity) ?? undefined,
-      time: !newTime ? "Please choose a time." : undefined,
+      when: !newDate
+        ? "Please choose a date and time."
+        : !newTime
+          ? "Please choose a time."
+          : undefined,
       notes: validateNotes(newNotes) ?? undefined,
     };
     setFieldErrors(errors);
 
-    if (errors.place || errors.activity || errors.time || errors.notes) return;
+    if (errors.place || errors.activity || errors.when || errors.notes) return;
 
     setIsSubmitting(true);
 
     const eventData = {
       // Keep the existing ID if we are editing, otherwise generate a new one
       id: editingEventId ? editingEventId : Math.random().toString(),
+      // Non-null: the validation above guarantees a date is set.
+      date: formatDate(newDate!),
       time: newTime,
       place: newActivity.trim(),
       address: newPlace.trim(),
@@ -175,11 +199,11 @@ export default function TripDetailsScreen() {
       if (response.ok) {
         if (editingEventId) {
           setItinerary((prev) =>
-            sortByTime(prev.map((e) => (e.id === editingEventId ? eventData : e))),
+            sortEvents(prev.map((e) => (e.id === editingEventId ? eventData : e))),
           );
         } else {
           const data = await response.json();
-          setItinerary((prev) => sortByTime([...prev, data.item]));
+          setItinerary((prev) => sortEvents([...prev, data.item]));
         }
 
         // Reset form and close modal
@@ -237,6 +261,100 @@ export default function TripDetailsScreen() {
             } catch (error) {
               // Log any errors during the deletion process
               console.error("Error deleting event:", error);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  /* ---------------------------------------------------------------- */
+  /* Bulk selection                                                     */
+  /* ---------------------------------------------------------------- */
+
+  /** Leaving selection always drops the ticks, so no id can go stale. */
+  const exitSelection = () => {
+    setIsSelecting(false);
+    setSelectedIds(new Set());
+  };
+
+  const enterSelection = (eventId: string) => {
+    setIsSelecting(true);
+    setSelectedIds(new Set([eventId]));
+  };
+
+  const toggleSelected = (eventId: string) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(eventId)) next.delete(eventId);
+      else next.add(eventId);
+      return next;
+    });
+
+  const allSelected =
+    itinerary.length > 0 && selectedIds.size === itinerary.length;
+
+  const toggleSelectAll = () =>
+    setSelectedIds(
+      allSelected ? new Set() : new Set(itinerary.map((e) => e.id)),
+    );
+
+  const handleDeleteSelected = () => {
+    if (isBulkDeleting || selectedIds.size === 0) return;
+
+    const count = selectedIds.size;
+    Alert.alert(
+      `Delete ${count} ${count === 1 ? "event" : "events"}?`,
+      "This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            setIsBulkDeleting(true);
+            const ids = [...selectedIds];
+            try {
+              // One request per event, over the endpoint that already exists.
+              // allSettled rather than all: one failure must not abandon the
+              // deletions that did go through.
+              const results = await Promise.allSettled(
+                ids.map((eventId) =>
+                  apiFetch(`/trips/${id}/itinerary/${eventId}`, {
+                    method: "DELETE",
+                  }),
+                ),
+              );
+
+              const deleted = new Set(
+                ids.filter(
+                  (_, i) =>
+                    results[i].status === "fulfilled" &&
+                    (results[i] as PromiseFulfilledResult<Response>).value.ok,
+                ),
+              );
+
+              setItinerary((prev) => prev.filter((e) => !deleted.has(e.id)));
+
+              const failed = ids.filter((eventId) => !deleted.has(eventId));
+              if (failed.length > 0) {
+                // Keep the ones that failed ticked so a retry is one tap.
+                setSelectedIds(new Set(failed));
+                Alert.alert(
+                  "Some events were not deleted",
+                  `${failed.length} of ${ids.length} could not be removed. They are still selected — tap delete to try again.`,
+                );
+              } else {
+                exitSelection();
+              }
+            } catch (error) {
+              console.error("Error deleting events:", error);
+              Alert.alert(
+                "Connection problem",
+                "Could not reach the server. Check your connection and try again.",
+              );
+            } finally {
+              setIsBulkDeleting(false);
             }
           },
         },
@@ -311,38 +429,125 @@ export default function TripDetailsScreen() {
     fetchItinerary();
   }, []);
 
-  const renderEventCard = ({ item }: { item: any }) => (
-    <View style={styles.eventCard}>
-      <View style={styles.eventTimeBlock}>
-        <Text style={styles.eventTime}>{item.time}</Text>
-      </View>
-      <View style={styles.eventDivider} />
-      <View style={styles.eventInfo}>
-        <Text style={styles.eventActivity}>{item.place}</Text>
-        <Text style={styles.eventPlace}>{item.address}</Text>
-      </View>
+  const daySections = useMemo(
+    () => groupEventsByDay(itinerary, tripRange),
+    [itinerary, tripRange],
+  );
 
-      {/* Edit icon button */}
-      <TouchableOpacity
-        style={{ padding: 15 }}
-        onPress={() => openEditModal(item)}
-      >
-        <Ionicons name="pencil-outline" size={20} color={colors.primary} />
-      </TouchableOpacity>
-      {/* Delete icon button on the right side of the card */}
-      <TouchableOpacity
-        style={styles.deleteIconButton}
-        onPress={() => handleDeleteEvent(item.id)}
-      >
-        <Ionicons name="trash-outline" size={20} color={colors.danger} />
-      </TouchableOpacity>
+  const renderDayHeader = ({ section }: { section: DaySection }) => (
+    <View style={styles.dayHeader}>
+      <Text style={styles.dayNumber}>DAY {section.dayNumber}</Text>
+      <Text style={styles.dayDot}>·</Text>
+      <Text style={styles.dayDate}>{section.title}</Text>
+      {/* Omitted at zero — the placeholder below already says as much. */}
+      {section.data.length > 0 && (
+        <Text style={styles.dayCount}>
+          {section.data.length} {section.data.length === 1 ? "event" : "events"}
+        </Text>
+      )}
     </View>
   );
+
+  /**
+   * An empty day is the fastest way to add something to that day, so the
+   * placeholder is the tap target rather than a dead message. It is drawn as
+   * a dashed outline, not a filled card, so a mostly-empty trip does not read
+   * as a wall of content.
+   */
+  const renderEmptyDay = ({ section }: { section: DaySection }) =>
+    section.data.length > 0 ? null : (
+      <TouchableOpacity
+        style={styles.emptyDay}
+        // Inert while selecting — there is nothing here to select, and
+        // opening the form mid-selection would be a surprise.
+        disabled={isSelecting}
+        onPress={() => openAddModalForDate(section.date)}
+        accessibilityRole="button"
+        accessibilityLabel={`Nothing planned on ${section.title}. Tap to add an event.`}
+      >
+        <Ionicons
+          name="sparkles-outline"
+          size={18}
+          color={colors.textDisabled}
+        />
+        <View style={styles.emptyDayText}>
+          <Text style={styles.emptyDayTitle}>Nothing planned yet</Text>
+          <Text style={styles.emptyDayHint}>Tap to add something to this day</Text>
+        </View>
+      </TouchableOpacity>
+    );
+
+  const renderEventCard = ({ item }: { item: any }) => {
+    const isSelected = selectedIds.has(item.id);
+
+    return (
+      <TouchableOpacity
+        style={[styles.eventCard, isSelected && styles.eventCardSelected]}
+        // Outside selection mode the card itself is inert; the pencil and the
+        // trash are the only targets, exactly as before.
+        activeOpacity={isSelecting ? 0.7 : 1}
+        onPress={() => isSelecting && toggleSelected(item.id)}
+        onLongPress={() => enterSelection(item.id)}
+        delayLongPress={300}
+        accessibilityRole={isSelecting ? "checkbox" : undefined}
+        accessibilityState={isSelecting ? { checked: isSelected } : undefined}
+      >
+        <View style={styles.eventTimeBlock}>
+          <Text style={styles.eventTime}>{item.time}</Text>
+        </View>
+        <View style={styles.eventDivider} />
+        <View style={styles.eventInfo}>
+          <Text style={styles.eventActivity}>{item.place}</Text>
+          <Text style={styles.eventPlace}>{item.address}</Text>
+        </View>
+
+        {isSelecting ? (
+          /* Tapping the card is what toggles selection, so this is an
+             indicator rather than its own button. */
+          <View style={styles.selectIcon}>
+            <Ionicons
+              name={isSelected ? "checkmark-circle" : "ellipse-outline"}
+              size={24}
+              color={isSelected ? colors.primary : colors.textDisabled}
+            />
+          </View>
+        ) : (
+          <>
+            {/* Edit icon button */}
+            <TouchableOpacity
+              style={{ padding: 15 }}
+              onPress={() => openEditModal(item)}
+            >
+              <Ionicons name="pencil-outline" size={20} color={colors.primary} />
+            </TouchableOpacity>
+            {/* Delete icon button on the right side of the card */}
+            <TouchableOpacity
+              style={styles.deleteIconButton}
+              onPress={() => handleDeleteEvent(item.id)}
+            >
+              <Ionicons name="trash-outline" size={20} color={colors.danger} />
+            </TouchableOpacity>
+          </>
+        )}
+      </TouchableOpacity>
+    );
+  };
+  /**
+   * Opens a blank form already pointed at one day — what an empty day's
+   * placeholder does, so adding to day 4 is a single tap.
+   */
+  const openAddModalForDate = (day: Date) => {
+    resetEventForm();
+    setNewDate(day);
+    setIsModalVisible(true);
+  };
+
   const openEditModal = (event: any) => {
     // Populate all the fields with existing data
     setEditingEventId(event.id);
     setNewActivity(event.place);
     setNewTime(event.time);
+    setNewDate(event.date ? parseDate(event.date) : null);
     setNewPlace(event.address);
     setNewLat(event.lat);
     setNewLng(event.lng);
@@ -385,28 +590,93 @@ export default function TripDetailsScreen() {
                 { paddingHorizontal: 20, paddingTop: 15 },
               ]}
             >
-              <Text style={styles.sectionTitle}>Daily Plan</Text>
+              {isSelecting ? (
+                /* Selection turns the header into its own toolbar, so there
+                   is exactly one thing to do while events are ticked. */
+                <>
+                  <TouchableOpacity
+                    onPress={exitSelection}
+                    disabled={isBulkDeleting}
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.selectionAction}>Cancel</Text>
+                  </TouchableOpacity>
 
-              <View style={{ flexDirection: "row", gap: 10 }}>
-                <TouchableOpacity
-                  style={styles.iconButton}
-                  onPress={() => setIsMapView(!isMapView)}
-                >
-                  <Ionicons
-                    name={isMapView ? "list" : "map"}
-                    size={20}
-                    color={colors.primary}
-                  />
-                </TouchableOpacity>
+                  <Text style={styles.selectionCount}>
+                    {selectedIds.size} selected
+                  </Text>
 
-                <TouchableOpacity
-                  style={styles.addButton}
-                  onPress={() => setIsModalVisible(true)}
-                >
-                  <Ionicons name="add" size={20} color={colors.primaryContrast} />
-                  <Text style={styles.addButtonText}>Add Event</Text>
-                </TouchableOpacity>
-              </View>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
+                    <TouchableOpacity
+                      onPress={toggleSelectAll}
+                      disabled={isBulkDeleting || itinerary.length === 0}
+                      accessibilityRole="button"
+                    >
+                      <Text style={styles.selectionAction}>
+                        {allSelected ? "Clear" : "Select all"}
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.iconButton}
+                      onPress={handleDeleteSelected}
+                      disabled={isBulkDeleting || selectedIds.size === 0}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Delete ${selectedIds.size} selected events`}
+                    >
+                      {isBulkDeleting ? (
+                        <ActivityIndicator size="small" color={colors.danger} />
+                      ) : (
+                        <Ionicons
+                          name="trash-outline"
+                          size={20}
+                          color={
+                            selectedIds.size === 0
+                              ? colors.textDisabled
+                              : colors.danger
+                          }
+                        />
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.sectionTitle}>Daily Plan</Text>
+
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                    {/* Only offered when there is something to select. */}
+                    {itinerary.length > 0 && !isMapView && (
+                      <TouchableOpacity
+                        onPress={() => setIsSelecting(true)}
+                        accessibilityRole="button"
+                        accessibilityLabel="Select events to delete"
+                      >
+                        <Text style={styles.selectionAction}>Select</Text>
+                      </TouchableOpacity>
+                    )}
+
+                    <TouchableOpacity
+                      style={styles.iconButton}
+                      onPress={() => setIsMapView(!isMapView)}
+                    >
+                      <Ionicons
+                        name={isMapView ? "list" : "map"}
+                        size={20}
+                        color={colors.primary}
+                      />
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.addButton}
+                      onPress={() => setIsModalVisible(true)}
+                    >
+                      <Ionicons name="add" size={20} color={colors.primaryContrast} />
+                      <Text style={styles.addButtonText}>Add Event</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
             </View>
 
             {loading ? (
@@ -489,19 +759,27 @@ export default function TripDetailsScreen() {
                 )}
               </View>
             ) : (
-              <FlatList
-                data={itinerary}
+              <SectionList
+                sections={daySections}
                 renderItem={renderEventCard}
+                renderSectionHeader={renderDayHeader}
+                renderSectionFooter={renderEmptyDay}
                 keyExtractor={(item) => item.id}
                 contentContainerStyle={styles.listPadding}
-                ListEmptyComponent={
-                  <View style={styles.emptyState}>
-                    <Ionicons name="calendar-outline" size={48} color={colors.textDisabled} />
-                    <Text style={styles.emptyText}>No events yet.</Text>
-                    <Text style={styles.emptySubText}>
-                      Tap “Add Event” to plan your day.
-                    </Text>
-                  </View>
+                // Keeps the day you are scrolling through named at all times.
+                stickySectionHeadersEnabled
+                // Every trip day is a section, so the list is only truly empty
+                // when the trip has no dates to build sections from.
+                ListHeaderComponent={
+                  itinerary.length === 0 ? (
+                    <View style={styles.emptyState}>
+                      <Ionicons name="calendar-outline" size={48} color={colors.textDisabled} />
+                      <Text style={styles.emptyText}>No events yet.</Text>
+                      <Text style={styles.emptySubText}>
+                        Tap a day below, or “Add Event”, to start planning.
+                      </Text>
+                    </View>
+                  ) : null
                 }
               />
             )}
@@ -620,44 +898,48 @@ export default function TripDetailsScreen() {
                       </Text>
                     )}
 
-                    {/* 3. Time Input */}
-                    <Text style={styles.inputLabel}>Time</Text>
+                    {/* 3. When — one field holding both the day and the time */}
+                    <Text style={styles.inputLabel}>When</Text>
 
-                    {/* Button that looks like an input to trigger the time picker */}
+                    {/* Button that looks like an input to trigger the picker */}
                     <TouchableOpacity
                       style={[
                         styles.input,
                         { justifyContent: "center" },
-                        fieldErrors.time && styles.inputError,
+                        fieldErrors.when && styles.inputError,
                       ]}
-                      onPress={() => setTimePickerVisible(true)}
+                      onPress={() => setWhenPickerVisible(true)}
                       accessibilityRole="button"
-                      accessibilityLabel="Choose activity time"
+                      accessibilityLabel="Choose the day and time for this activity"
                     >
                       <Text
                         style={
-                          newTime ? styles.timeValue : styles.timePlaceholder
+                          newDate && newTime
+                            ? styles.timeValue
+                            : styles.timePlaceholder
                         }
                       >
-                        {newTime ? newTime : "Select time"}
+                        {newDate && newTime
+                          ? `${formatDate(newDate)} · ${newTime}`
+                          : "Select date and time"}
                       </Text>
                     </TouchableOpacity>
-                    {fieldErrors.time && (
+                    {fieldErrors.when && (
                       <Text style={styles.fieldErrorText}>
-                        {fieldErrors.time}
+                        {fieldErrors.when}
                       </Text>
                     )}
 
-                    {/* Native scroll-wheel time picker, opened on the value
-                        already chosen so editing starts from the current time. */}
-                    <DateTimePickerModal
-                      isVisible={isTimePickerVisible}
-                      mode="time"
-                      display="spinner"
-                      is24Hour={true}
-                      date={parseTime(newTime) ?? new Date()}
-                      onConfirm={handleConfirmTime}
-                      onCancel={() => setTimePickerVisible(false)}
+                    {/* Trip calendar, then the scroll wheel. Both values land
+                        together, so the field is never half set. */}
+                    <TripDayTimePicker
+                      visible={isWhenPickerVisible}
+                      tripStart={tripRange?.start ?? null}
+                      tripEnd={tripRange?.end ?? null}
+                      initialDate={newDate}
+                      initialTime={newTime}
+                      onConfirm={handleConfirmWhen}
+                      onCancel={() => setWhenPickerVisible(false)}
                     />
 
                     <Text style={styles.inputLabel}>Notes</Text>
@@ -718,13 +1000,16 @@ export default function TripDetailsScreen() {
               </TouchableOpacity>
             </Modal>
 
-            {/* Chat FAB */}
-            <TouchableOpacity
-              style={styles.fab}
-              onPress={() => setViewMode("chat")}
-            >
-              <Ionicons name="chatbubble-ellipses" size={30} color={colors.primaryContrast} />
-            </TouchableOpacity>
+            {/* Chat FAB — hidden while selecting, so the only actions on
+                screen are the ones that apply to the ticked events. */}
+            {!isSelecting && (
+              <TouchableOpacity
+                style={styles.fab}
+                onPress={() => setViewMode("chat")}
+              >
+                <Ionicons name="chatbubble-ellipses" size={30} color={colors.primaryContrast} />
+              </TouchableOpacity>
+            )}
           </View>
         ) : (
           <View style={{ flex: 1 }}>
@@ -852,6 +1137,77 @@ const makeStyles = (colors: ThemeColors) =>
       fontSize: FontSize.small,
     },
 
+    // Day separator. Sticky, so it needs an opaque background of its own —
+    // a transparent header would let event cards scroll through it.
+    dayHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: Spacing.xs + 2,
+      backgroundColor: colors.background,
+      paddingTop: Spacing.md,
+      paddingBottom: Spacing.sm,
+    },
+    dayNumber: {
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.bold,
+      color: colors.primary,
+      letterSpacing: 0.8,
+    },
+    dayDot: {
+      fontSize: FontSize.caption,
+      color: colors.textDisabled,
+    },
+    dayDate: {
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.semibold,
+      color: colors.textSecondary,
+    },
+    dayCount: {
+      marginLeft: "auto",
+      fontSize: FontSize.tiny,
+      fontFamily: FontFamily.regular,
+      color: colors.textMuted,
+    },
+
+    // A slot waiting to be filled, not a card. Dashed and transparent so it
+    // recedes behind the real events on a mostly-empty trip.
+    emptyDay: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: Spacing.md,
+      borderWidth: 1,
+      borderStyle: "dashed",
+      borderColor: colors.border,
+      borderRadius: Radius.lg,
+      paddingVertical: Spacing.lg,
+      paddingHorizontal: Spacing.lg,
+      marginBottom: Spacing.md,
+    },
+    emptyDayText: { flex: 1 },
+    emptyDayTitle: {
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.medium,
+      color: colors.textSecondary,
+    },
+    emptyDayHint: {
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.regular,
+      color: colors.textMuted,
+      marginTop: 2,
+    },
+
+    selectionCount: {
+      fontSize: FontSize.body,
+      fontFamily: FontFamily.semibold,
+      color: colors.textPrimary,
+    },
+    selectionAction: {
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.semibold,
+      color: colors.primary,
+    },
+    selectIcon: { paddingHorizontal: Spacing.lg },
+
     eventCard: {
       flexDirection: "row",
       backgroundColor: colors.surface,
@@ -860,6 +1216,11 @@ const makeStyles = (colors: ThemeColors) =>
       alignItems: "center",
       ...Elevation.sm,
       overflow: "hidden",
+    },
+    eventCardSelected: {
+      borderWidth: 2,
+      borderColor: colors.primary,
+      backgroundColor: colors.primarySoft,
     },
     eventTimeBlock: {
       backgroundColor: colors.primarySoft,
