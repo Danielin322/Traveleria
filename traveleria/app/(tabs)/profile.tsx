@@ -18,7 +18,9 @@ import { OptionSelector } from "../../components/OptionSelector";
 import {
   dietaryLabels,
   genderLabel,
+  interestLabels,
   parseDietary,
+  parseInterests,
 } from "../../constants/profileOptions";
 import {
   Elevation,
@@ -74,7 +76,7 @@ export default function ProfileScreen() {
         language: data.language || "",
         age: data.age ? String(data.age) : "",
         tripsCount: data.trips_count || 0,
-        interests: data.interests ? data.interests.split(",").map((i: string) => i.trim()) : [],
+        interests: parseInterests(data.interests),
         gender: data.gender || "",
         // Arrives as a JSON array from the TEXT[] column.
         dietary: parseDietary(data.dietary),
@@ -126,7 +128,8 @@ export default function ProfileScreen() {
         country: userData.country,
         language: userData.language,
         age: userData.age,
-        interests: userData.interests.join(", "),
+        // Router params are strings, so the array travels as JSON.
+        interests: JSON.stringify(userData.interests),
         gender: userData.gender,
         // Router params are strings, so the array travels as JSON.
         dietary: JSON.stringify(userData.dietary),
@@ -289,14 +292,12 @@ export default function ProfileScreen() {
       <View style={styles.interestsSection}>
         <Text style={styles.sectionTitle}>Interests</Text>
         <View style={styles.interestsGrid}>
-          {userData.interests.filter(Boolean).length > 0 ? (
-            userData.interests.map((interest, index) =>
-              interest ? (
-                <View key={index} style={styles.interestTag}>
-                  <Text style={styles.interestText}>{interest}</Text>
-                </View>
-              ) : null,
-            )
+          {userData.interests.length > 0 ? (
+            interestLabels(userData.interests).map((label, index) => (
+              <View key={index} style={styles.interestTag}>
+                <Text style={styles.interestText}>{label}</Text>
+              </View>
+            ))
           ) : (
             <Text style={styles.interestsEmpty}>
               No interests yet — tap Edit to add some.

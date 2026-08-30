@@ -12,11 +12,20 @@ import {
 
 import { AppButton } from "../components/AppButton";
 import { FormField } from "../components/FormField";
-import { ChipMultiSelect, OptionSelector } from "../components/OptionSelector";
+import {
+  ChipMultiSelect,
+  ChipMultiSelectWithOther,
+  OptionSelector,
+} from "../components/OptionSelector";
 import {
   DIETARY_OPTIONS,
   GENDER_OPTIONS,
+  INTEREST_LIMITS,
+  INTEREST_OPTIONS,
+  interestLabel,
+  isCustomInterest,
   parseDietary,
+  parseInterests,
 } from "../constants/profileOptions";
 import {
   FontFamily,
@@ -38,14 +47,18 @@ export default function EditProfileScreen() {
   const [country, setCountry] = useState((params.country as string) || "");
   const [language, setLanguage] = useState((params.language as string) || "");
   const [age, setAge] = useState((params.age as string) || "");
-  const [interests, setInterests] = useState(
-    (params.interests as string) || "",
-  );
   const [gender, setGender] = useState((params.gender as string) || "");
-  // Router params are strings, so the array is passed as JSON and parsed back.
+  // Router params are strings, so arrays are passed as JSON and parsed back.
   const [dietary, setDietary] = useState<string[]>(() => {
     try {
       return parseDietary(JSON.parse((params.dietary as string) || "[]"));
+    } catch {
+      return [];
+    }
+  });
+  const [interests, setInterests] = useState<string[]>(() => {
+    try {
+      return parseInterests(JSON.parse((params.interests as string) || "[]"));
     } catch {
       return [];
     }
@@ -155,14 +168,23 @@ export default function EditProfileScreen() {
           />
         </View>
 
-        <FormField
-          label="Interests (separated by commas)"
-          value={interests}
-          onChangeText={setInterests}
-          multiline
-          placeholder="e.g. Shopping, Hiking, Art"
-          style={styles.textArea}
-        />
+        <View style={styles.group}>
+          <Text style={styles.label}>Interests</Text>
+          <Text style={styles.hint}>
+            Pick anything you enjoy — we&apos;ll use it to suggest activities.
+            Tap “Other” to add your own.
+          </Text>
+          <ChipMultiSelectWithOther
+            options={INTEREST_OPTIONS}
+            values={interests}
+            onChange={setInterests}
+            labelOf={interestLabel}
+            isCustom={isCustomInterest}
+            maxCount={INTEREST_LIMITS.maxCount}
+            maxLength={INTEREST_LIMITS.maxLength}
+            placeholder="e.g. Birdwatching"
+          />
+        </View>
 
         <View style={styles.buttonContainer}>
           <AppButton
@@ -193,7 +215,6 @@ const makeStyles = (colors: ThemeColors) =>
       marginBottom: Spacing.xxxl,
       color: colors.textPrimary,
     },
-    textArea: { height: 100, textAlignVertical: "top" },
     group: { marginBottom: Spacing.xl },
     label: {
       fontSize: FontSize.caption,
