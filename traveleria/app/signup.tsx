@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   KeyboardAvoidingView,
@@ -22,8 +22,51 @@ import {
   Spacing,
   ThemeColors,
 } from "../constants/theme";
+import { useCountdown } from "../hooks/useCountdown";
 import { useThemeColors } from "../contexts/ThemeContext";
-import { confirmUser, registerUser } from "../services/authService";
+import {
+  confirmUser,
+  registerUser,
+  resendVerificationCode,
+} from "../services/authService";
+
+/**
+ * How long the resend button stays closed after a code is sent.
+ *
+ * Long enough that most emails land first, so the button is not tapped
+ * reflexively; short enough not to feel stuck. It also keeps normal use well
+ * inside Cognito's own throttling.
+ */
+const RESEND_COOLDOWN_SECONDS = 60;
+
+/**
+ * Cognito's error names turned into something a person can act on.
+ * Shared by sign-up, verification and resend, which fail in overlapping ways.
+ */
+const cognitoErrorMessage = (
+  error: unknown,
+  fallback = "An unexpected error occurred. Please try again.",
+) => {
+  switch ((error as { name?: string })?.name) {
+    case "UsernameExistsException":
+      return "This email is already registered. Please try logging in.";
+    case "InvalidPasswordException":
+      return "The password does not meet the security requirements.";
+    case "CodeMismatchException":
+      return "That code is not right. Check the latest email and try again.";
+    case "ExpiredCodeException":
+      return "That code has expired. Tap “Resend code” to get a new one.";
+    case "LimitExceededException":
+    case "TooManyRequestsException":
+      return "Too many attempts. Please wait a few minutes before requesting another code.";
+    case "UserNotFoundException":
+      return "We couldn't find that account. Please sign up again.";
+    case "NotAuthorizedException":
+      return "This account is already verified. Try logging in.";
+    default:
+      return (error as Error)?.message || fallback;
+  }
+};
 
 export default function SignupScreen() {
   const router = useRouter();
@@ -52,6 +95,17 @@ export default function SignupScreen() {
 
   // Blocks repeat taps while a Cognito request is in flight.
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isResending, setIsResending] = useState(false);
+
+  const { secondsLeft, start: startResendCooldown } = useCountdown(
+    RESEND_COOLDOWN_SECONDS,
+  );
+
+  // The first code goes out with the sign-up itself, so the cooldown starts
+  // when the verification step appears rather than when this screen mounts.
+  useEffect(() => {
+    if (isRegistered) startResendCooldown();
+  }, [isRegistered, startResendCooldown]);
 
   // Helper function to validate email format using regex
   const isValidEmail = (email: string) => {
@@ -102,26 +156,34 @@ export default function SignupScreen() {
       if (result.success) {
         setIsRegistered(true);
       } else {
-        // 4. Handle specific AWS error codes for better English messages
-        const error = result.error as any;
-        let errorMessage = "An unexpected error occurred. Please try again.";
-
-        // Mapping AWS Cognito error names to user-friendly English messages
-        if (error.name === "UsernameExistsException") {
-          errorMessage =
-            "This email is already registered. Please try logging in.";
-        } else if (error.name === "InvalidPasswordException") {
-          errorMessage =
-            "The password does not meet the security requirements.";
-        } else if (error.name === "LimitExceededException") {
-          errorMessage =
-            "Too many attempts. Please wait a moment and try again.";
-        }
-
-        Alert.alert("Registration Failed", errorMessage);
+        Alert.alert("Registration Failed", cognitoErrorMessage(result.error));
       }
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  /** Asks Cognito for a fresh code, then closes the button for another minute. */
+  const handleResendCode = async () => {
+    if (isResending || secondsLeft > 0) return;
+
+    setIsResending(true);
+    try {
+      const result = await resendVerificationCode(email);
+
+      if (result.success) {
+        // Restart before the alert, so the cooldown covers the time the user
+        // spends reading it.
+        startResendCooldown();
+        Alert.alert(
+          "Code sent",
+          `A new code is on its way to ${email}. The previous code no longer works.`,
+        );
+      } else {
+        Alert.alert("Could not resend", cognitoErrorMessage(result.error));
+      }
+    } finally {
+      setIsResending(false);
     }
   };
 
@@ -152,7 +214,7 @@ export default function SignupScreen() {
       } else {
         Alert.alert(
           "Verification Failed",
-          (result.error as Error)?.message || "Invalid code.",
+          cognitoErrorMessage(result.error, "Invalid code."),
         );
       }
     } finally {
@@ -203,11 +265,28 @@ export default function SignupScreen() {
             loading={isSubmitting}
           />
 
+          {/* Held closed for a minute after each send, so the button is not
+              tapped while the first email is still on its way. */}
+          {secondsLeft > 0 ? (
+            <Text style={styles.resendWaiting}>
+              Didn&apos;t get it? Resend in {secondsLeft}s
+            </Text>
+          ) : (
+            <AppButton
+              label="Resend code"
+              variant="ghost"
+              onPress={handleResendCode}
+              loading={isResending}
+              disabled={isSubmitting}
+              style={styles.secondaryAction}
+            />
+          )}
+
           <AppButton
             label="Cancel and Go Back"
             variant="ghost"
             onPress={goBackToLogin}
-            disabled={isSubmitting}
+            disabled={isSubmitting || isResending}
             style={styles.secondaryAction}
           />
         </View>
@@ -330,4 +409,16 @@ const makeStyles = (colors: ThemeColors) =>
       lineHeight: 17,
     },
     secondaryAction: { marginTop: Spacing.md },
+    // Occupies the same slot the enabled button will, so nothing jumps when
+    // the countdown reaches zero and the two swap.
+    resendWaiting: {
+      marginTop: Spacing.md,
+      minHeight: 52,
+      textAlignVertical: "center",
+      textAlign: "center",
+      lineHeight: 52,
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.regular,
+      color: colors.textMuted,
+    },
   });

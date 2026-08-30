@@ -1,4 +1,11 @@
-import { confirmSignUp, deleteUser, signIn, signOut, signUp } from "aws-amplify/auth";
+import {
+  confirmSignUp,
+  deleteUser,
+  resendSignUpCode,
+  signIn,
+  signOut,
+  signUp,
+} from "aws-amplify/auth";
 
 interface SignUpParams {
   email: string;
@@ -23,6 +30,22 @@ export const confirmUser = async (email: string, code: string) => {
   try {
     const { isSignUpComplete } = await confirmSignUp({ username: email, confirmationCode: code });
     return { success: true, isSignUpComplete };
+  } catch (error) {
+    return { success: false, error };
+  }
+};
+
+/**
+ * Sends a fresh confirmation code to a signed-up but unverified account.
+ *
+ * Wraps Cognito's ResendConfirmationCode, which every user pool app client
+ * exposes by default — no pool configuration is involved. Note that Cognito
+ * invalidates the previous code, so an older email stops working.
+ */
+export const resendVerificationCode = async (email: string) => {
+  try {
+    const { destination } = await resendSignUpCode({ username: email });
+    return { success: true, destination };
   } catch (error) {
     return { success: false, error };
   }
