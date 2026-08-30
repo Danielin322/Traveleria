@@ -21,6 +21,14 @@ DIETARY_VALUES = {
 }
 
 
+# Interests are an open set — the picker offers presets, but "Other" lets the
+# user type anything — so there is no allow-list to check against, and no CHECK
+# constraint in sql/005_user_interests.sql. These caps are what stands in for
+# one: they keep a runaway client from filling the column with junk.
+MAX_INTERESTS = 20
+MAX_INTEREST_LENGTH = 30
+
+
 def lambda_handler(event, context):
     method = event.get("httpMethod", "GET")
     try:
@@ -70,6 +78,54 @@ def _clean_dietary(body):
     return list(dict.fromkeys(dietary))
 
 
+def _clean_interests(body):
+    """
+    Absent means "leave unchanged". An empty list DOES clear the selection,
+    matching _clean_dietary — an empty array is not NULL, so it survives the
+    COALESCE in the UPDATE.
+
+    Unlike dietary, entries are not checked against a fixed set: anything the
+    user types under "Other" is valid. Only shape and size are enforced.
+    """
+    if "interests" not in body:
+        return None
+    interests = body.get("interests")
+    if interests is None:
+        return None
+    if not isinstance(interests, list):
+        raise AppError("interests must be a list of values")
+    if len(interests) > MAX_INTERESTS:
+        raise AppError(f"Please choose {MAX_INTERESTS} interests or fewer")
+
+    cleaned = []
+    for raw in interests:
+        if not isinstance(raw, str):
+            raise AppError("Each interest must be text")
+        value = raw.strip()
+        if not value:
+            continue
+        if len(value) > MAX_INTEREST_LENGTH:
+            raise AppError(
+                f"Interests must be {MAX_INTEREST_LENGTH} characters or fewer: {value[:40]}"
+            )
+        # Control characters never belong in a user-typed label, and would
+        # render as invisible junk in the chip.
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+            raise AppError("Interests cannot contain line breaks or control characters")
+        cleaned.append(value)
+
+    # De-duplicate case-insensitively, keeping the order and the casing the
+    # user picked them in.
+    seen = set()
+    unique = []
+    for value in cleaned:
+        key = value.casefold()
+        if key not in seen:
+            seen.add(key)
+            unique.append(value)
+    return unique
+
+
 def _get_profile(current_user):
     with get_db() as db:
         db.execute(
@@ -84,7 +140,7 @@ def _get_profile(current_user):
     return success({
         "email": current_user["email"], "full_name": row["full_name"],
         "country": row["country"], "language": row["language"],
-        "age": row["age"], "interests": row["interests"],
+        "age": row["age"], "interests": row["interests"] or [],
         "gender": row["gender"], "dietary": row["dietary"] or [],
         "trips_count": row["trips_count"],
     })
@@ -94,6 +150,7 @@ def _update_profile(event, current_user):
     body = parse_body(event)
     gender = _clean_gender(body)
     dietary = _clean_dietary(body)
+    interests = _clean_interests(body)
     with get_db() as db:
         db.execute(
             """
@@ -106,13 +163,13 @@ def _update_profile(event, current_user):
             RETURNING full_name, country, language, age, interests, gender, dietary
             """,
             (body.get("full_name"), body.get("country"), body.get("language"),
-             body.get("age"), body.get("interests"), gender, dietary,
+             body.get("age"), interests, gender, dietary,
              current_user["id"]),
         )
         row = db.fetchone()
     return success({
         "full_name": row["full_name"], "country": row["country"],
         "language": row["language"], "age": row["age"],
-        "interests": row["interests"], "gender": row["gender"],
+        "interests": row["interests"] or [], "gender": row["gender"],
         "dietary": row["dietary"] or [],
     })

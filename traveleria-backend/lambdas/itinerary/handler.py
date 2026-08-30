@@ -3,7 +3,13 @@ import uuid
 from shared.auth import get_current_user
 from shared.database import get_db
 from shared.response import error, success
-from shared.utils import AppError, get_or_create_default_trip_day, parse_body, parse_uuid
+from shared.utils import (
+    AppError,
+    format_event_date,
+    parse_body,
+    parse_uuid,
+    resolve_trip_day,
+)
 
 
 def lambda_handler(event, context):
@@ -33,7 +39,7 @@ def _get_itinerary(event, current_user):
     with get_db() as db:
         db.execute(
             """
-            SELECT dp.id, dp.visit_time AS time, dp.notes,
+            SELECT dp.id, dp.visit_time AS time, dp.notes, td.day_date,
                    p.name AS place, COALESCE(p.address, '') AS address, p.lat, p.lng
             FROM day_places dp
             JOIN trip_days td ON td.id = dp.trip_day_id
@@ -45,7 +51,8 @@ def _get_itinerary(event, current_user):
             (trip_uuid, current_user["id"]),
         )
         return success([
-            {"id": str(row["id"]), "time": row["time"], "place": row["place"],
+            {"id": str(row["id"]), "date": format_event_date(row["day_date"]),
+             "time": row["time"], "place": row["place"],
              "address": row["address"], "lat": row["lat"], "lng": row["lng"], "notes": row["notes"]}
             for row in db.fetchall()
         ])
@@ -55,7 +62,7 @@ def _create_item(event, current_user):
     trip_uuid = parse_uuid((event.get("pathParameters") or {}).get("trip_id", ""), "trip_id")
     body = parse_body(event)
     with get_db() as db:
-        trip_day_id = get_or_create_default_trip_day(db, trip_uuid, current_user["id"])
+        trip_day_id, day_date = resolve_trip_day(db, trip_uuid, current_user["id"], body)
         db.execute(
             "INSERT INTO places (name, address, google_place_id, lat, lng) VALUES (%s, %s, %s, %s, %s) RETURNING id",
             (body["place"], body.get("address", ""), f"manual:{uuid.uuid4()}", body.get("lat"), body.get("lng")),
@@ -67,7 +74,8 @@ def _create_item(event, current_user):
         )
         row = db.fetchone()
     return success({"message": "Event added successfully", "item": {
-        "id": str(row["id"]), "time": row["time"], "place": body["place"],
+        "id": str(row["id"]), "date": format_event_date(day_date),
+        "time": row["time"], "place": body["place"],
         "address": body.get("address", ""), "lat": body.get("lat"),
         "lng": body.get("lng"), "notes": body.get("notes"),
     }}, status=201)
@@ -95,11 +103,25 @@ def _update_item(event, current_user):
             "UPDATE places SET name=%s, address=%s, lat=%s, lng=%s, updated_at=NOW() WHERE id=%s",
             (body["place"], body.get("address", ""), body.get("lat"), body.get("lng"), row["place_id"]),
         )
-        db.execute(
-            "UPDATE day_places SET visit_time=%s, notes=%s, updated_at=NOW() WHERE id=%s",
-            (body["time"], body.get("notes"), event_uuid),
-        )
-    return success({"message": "Event updated successfully"})
+        # Moving an event to another day is just a new trip_day_id. Only
+        # touched when the client sent a date, so an older build that omits it
+        # leaves the event on the day it is already on.
+        if body.get("date"):
+            trip_day_id, day_date = resolve_trip_day(db, trip_uuid, current_user["id"], body)
+            db.execute(
+                "UPDATE day_places SET trip_day_id=%s, visit_time=%s, notes=%s, updated_at=NOW() WHERE id=%s",
+                (trip_day_id, body["time"], body.get("notes"), event_uuid),
+            )
+        else:
+            day_date = None
+            db.execute(
+                "UPDATE day_places SET visit_time=%s, notes=%s, updated_at=NOW() WHERE id=%s",
+                (body["time"], body.get("notes"), event_uuid),
+            )
+    return success({
+        "message": "Event updated successfully",
+        "date": format_event_date(day_date) if day_date else None,
+    })
 
 
 def _delete_item(event, current_user):

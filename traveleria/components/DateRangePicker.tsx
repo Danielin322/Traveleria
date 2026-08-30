@@ -11,31 +11,9 @@ import {
   ThemeColors,
 } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
-import { formatDate, startOfDay } from "../utils/validation";
+import { datesBetween, fromKey, makeCalendarTheme, toKey } from "../utils/calendar";
+import { formatDate } from "../utils/validation";
 import { AppButton } from "./AppButton";
-
-/** react-native-calendars keys everything by "YYYY-MM-DD". */
-const toKey = (d: Date) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-    d.getDate(),
-  ).padStart(2, "0")}`;
-
-const fromKey = (key: string) => {
-  const [y, m, d] = key.split("-").map(Number);
-  return new Date(y, m - 1, d);
-};
-
-/** Every date from start to end inclusive, for the highlighted band. */
-const datesBetween = (start: Date, end: Date) => {
-  const out: string[] = [];
-  const cursor = startOfDay(start);
-  const last = startOfDay(end);
-  while (cursor <= last) {
-    out.push(toKey(cursor));
-    cursor.setDate(cursor.getDate() + 1);
-  }
-  return out;
-};
 
 type Props = {
   visible: boolean;
@@ -129,20 +107,7 @@ export function DateRangePicker({
             enableSwipeMonths
             // Remount on theme change; the library caches its theme internally.
             key={isDark ? "dark" : "light"}
-            theme={{
-              calendarBackground: colors.surface,
-              monthTextColor: colors.textPrimary,
-              textMonthFontFamily: FontFamily.semibold,
-              textMonthFontSize: FontSize.body,
-              arrowColor: colors.primary,
-              dayTextColor: colors.textPrimary,
-              textDisabledColor: colors.textDisabled,
-              textDayFontFamily: FontFamily.regular,
-              textDayHeaderFontFamily: FontFamily.medium,
-              textSectionTitleColor: colors.textSecondary,
-              // Today is marked so the calendar always shows "now" on open.
-              todayTextColor: colors.primary,
-            }}
+            theme={makeCalendarTheme(colors)}
           />
 
           <View style={styles.actions}>

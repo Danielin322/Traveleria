@@ -3,6 +3,7 @@ import { useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -38,6 +39,7 @@ import {
 import {
   LIMITS,
   formatDateRange,
+  parseDateRange,
   validateDestination,
   validateTripDates,
   validateTripTitle,
@@ -61,6 +63,9 @@ export default function HomeScreen() {
   const fieldStyles = useFieldStyles();
 
   const [isModalVisible, setIsModalVisible] = useState(false);
+  // Null while creating, the trip's id while editing — one modal serves both,
+  // the same way the event form in trip-details.tsx does.
+  const [editingTripId, setEditingTripId] = useState<string | null>(null);
   const [newTitle, setNewTitle] = useState("");
   const [newLocation, setNewLocation] = useState("");
   const [startDate, setStartDate] = useState<Date | null>(null);
@@ -110,7 +115,13 @@ export default function HomeScreen() {
     setRefreshing(false);
   };
 
+  // Bulk edit: tick several trips, remove them together.
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+
   const resetTripForm = () => {
+    setEditingTripId(null);
     setNewTitle("");
     setNewLocation("");
     setStartDate(null);
@@ -131,6 +142,18 @@ export default function HomeScreen() {
     setDatePickerVisible(false);
   };
 
+  const openEditTrip = (trip: any) => {
+    const parsed = parseDateRange(trip.date);
+    setEditingTripId(trip.id);
+    setNewTitle(trip.title);
+    setNewLocation(trip.location);
+    setStartDate(parsed?.start ?? null);
+    setEndDate(parsed?.end ?? null);
+    setFieldErrors({});
+    setAddError(null);
+    setIsModalVisible(true);
+  };
+
   const handleAddTrip = async () => {
     // Ignore repeat taps while the first request is still in flight.
     if (isSubmitting) return;
@@ -149,31 +172,213 @@ export default function HomeScreen() {
 
     setIsSubmitting(true);
     try {
-      const response = await apiFetch("/trips", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: newTitle.trim(),
-          // Non-null: validateTripDates above guarantees both dates are set.
-          date: formatDateRange(startDate!, endDate!),
-          location: newLocation.trim().toUpperCase(),
-        }),
-      });
+      const response = await apiFetch(
+        editingTripId ? `/trips/${editingTripId}` : "/trips",
+        {
+          method: editingTripId ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: newTitle.trim(),
+            // Non-null: validateTripDates above guarantees both dates are set.
+            date: formatDateRange(startDate!, endDate!),
+            location: newLocation.trim().toUpperCase(),
+          }),
+        },
+      );
 
       if (response.ok) {
+        // Narrowing the dates deletes nothing, but it can leave events outside
+        // the range. Say so rather than letting it be discovered later.
+        const data = await response.json().catch(() => null);
+        const outside = data?.events_outside_range ?? 0;
+        if (editingTripId && outside > 0) {
+          Alert.alert(
+            "Dates changed",
+            `${outside} ${outside === 1 ? "event falls" : "events fall"} outside the new dates. Nothing was deleted — they still appear in the daily plan under their own day.`,
+          );
+        }
         fetchTrips();
         setIsModalVisible(false);
         resetTripForm();
       } else {
         const data = await response.json();
-        setAddError(data?.detail || data?.error || "Failed to create trip.");
+        setAddError(
+          data?.detail ||
+            data?.error ||
+            `Failed to ${editingTripId ? "update" : "create"} trip.`,
+        );
       }
     } catch (err) {
       setAddError("Could not connect to server.");
-      console.error("Error adding trip:", err);
+      console.error("Error saving trip:", err);
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  /* ---------------------------------------------------------------- */
+  /* Deleting trips                                                     */
+  /* ---------------------------------------------------------------- */
+
+  /** Leaving selection always drops the ticks, so no id can go stale. */
+  const exitSelection = () => {
+    setIsSelecting(false);
+    setSelectedIds(new Set());
+  };
+
+  const enterSelection = (tripId: string) => {
+    setIsSelecting(true);
+    setSelectedIds(new Set([tripId]));
+  };
+
+  const toggleSelected = (tripId: string) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(tripId)) next.delete(tripId);
+      else next.add(tripId);
+      return next;
+    });
+
+  const allSelected = trips.length > 0 && selectedIds.size === trips.length;
+
+  const toggleSelectAll = () =>
+    setSelectedIds(allSelected ? new Set() : new Set(trips.map((t) => t.id)));
+
+  /**
+   * Deletes the given ids and returns the failures, each with the server's
+   * own explanation. Reporting "could not be removed" without a reason makes
+   * a misconfigured backend look like a broken button.
+   */
+  const deleteTrips = async (ids: string[]) => {
+    const results = await Promise.allSettled(
+      ids.map((tripId) => apiFetch(`/trips/${tripId}`, { method: "DELETE" })),
+    );
+
+    const deleted = new Set<string>();
+    const failures: { id: string; reason: string }[] = [];
+
+    for (let i = 0; i < ids.length; i++) {
+      const result = results[i];
+
+      if (result.status === "rejected") {
+        failures.push({ id: ids[i], reason: "Could not reach the server." });
+        continue;
+      }
+
+      const response = result.value;
+      if (response.ok) {
+        deleted.add(ids[i]);
+        continue;
+      }
+
+      let detail = "";
+      try {
+        const body = await response.json();
+        detail = body?.detail || body?.error || body?.message || "";
+      } catch {
+        // Non-JSON error body; fall back to the status alone.
+      }
+
+      // API Gateway answers an unrouted path with 403 "Missing Authentication
+      // Token", which reads as an auth problem and is not one. Say what it
+      // actually means.
+      if (response.status === 403 && /missing authentication token/i.test(detail)) {
+        detail = "This route is not deployed on the API yet.";
+      }
+
+      failures.push({
+        id: ids[i],
+        reason: detail
+          ? `${detail} (HTTP ${response.status})`
+          : `The server returned HTTP ${response.status}.`,
+      });
+    }
+
+    setTrips((prev) => prev.filter((t) => !deleted.has(t.id)));
+    return failures;
+  };
+
+  /**
+   * A trip carries far more than a single event does, so the confirmation
+   * names it and counts what goes with it.
+   */
+  const handleDeleteTrip = (trip: any) => {
+    const n = trip.events_count ?? 0;
+    Alert.alert(
+      `Delete “${trip.title}”?`,
+      n > 0
+        ? `Its ${n} ${n === 1 ? "event" : "events"} will be deleted too. This cannot be undone.`
+        : "This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const failed = await deleteTrips([trip.id]);
+              if (failed.length > 0) {
+                Alert.alert("Could not delete trip", failed[0].reason);
+              }
+            } catch (err) {
+              console.error("Error deleting trip:", err);
+              Alert.alert("Connection problem", "Could not reach the server.");
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const handleDeleteSelected = () => {
+    if (isBulkDeleting || selectedIds.size === 0) return;
+
+    const ids = [...selectedIds];
+    const totalEvents = trips
+      .filter((t) => ids.includes(t.id))
+      .reduce((sum, t) => sum + (t.events_count ?? 0), 0);
+
+    Alert.alert(
+      `Delete ${ids.length} ${ids.length === 1 ? "trip" : "trips"}?`,
+      totalEvents > 0
+        ? `${totalEvents} ${totalEvents === 1 ? "event" : "events"} will be deleted with them. This cannot be undone.`
+        : "This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            setIsBulkDeleting(true);
+            try {
+              const failed = await deleteTrips(ids);
+              if (failed.length > 0) {
+                // Keep failures ticked so a retry is one tap.
+                setSelectedIds(new Set(failed.map((f) => f.id)));
+                // Lead with why. When every failure shares a cause — which is
+                // usually the case — one reason explains the whole batch.
+                const reasons = [...new Set(failed.map((f) => f.reason))];
+                Alert.alert(
+                  failed.length === ids.length
+                    ? "Could not delete"
+                    : "Some trips were not deleted",
+                  reasons.length === 1
+                    ? reasons[0]
+                    : `${failed.length} of ${ids.length} failed:\n\n${reasons.join("\n")}`,
+                );
+              } else {
+                exitSelection();
+              }
+            } catch (err) {
+              console.error("Error deleting trips:", err);
+              Alert.alert("Connection problem", "Could not reach the server.");
+            } finally {
+              setIsBulkDeleting(false);
+            }
+          },
+        },
+      ],
+    );
   };
 
   useEffect(() => {
@@ -185,10 +390,22 @@ export default function HomeScreen() {
     const badge = formatTripBadge(status);
     const isPast = status?.kind === "past";
 
+    const isSelected = selectedIds.has(item.id);
+
     return (
       <TouchableOpacity
-        style={[styles.tripCard, isPast && styles.tripCardPast]}
-        onPress={() =>
+        style={[
+          styles.tripCard,
+          isPast && styles.tripCardPast,
+          isSelected && styles.tripCardSelected,
+        ]}
+        onPress={() => {
+          // While selecting, the card toggles instead of navigating —
+          // opening a trip mid-selection would lose the ticks.
+          if (isSelecting) {
+            toggleSelected(item.id);
+            return;
+          }
           router.push({
             pathname: "/trip-details",
             params: {
@@ -197,8 +414,12 @@ export default function HomeScreen() {
               location: item.location,
               date: item.date,
             },
-          })
-        }
+          });
+        }}
+        onLongPress={() => enterSelection(item.id)}
+        delayLongPress={300}
+        accessibilityRole={isSelecting ? "checkbox" : "button"}
+        accessibilityState={isSelecting ? { checked: isSelected } : undefined}
       >
         <View style={styles.tripInfo}>
           <View style={styles.tripCardTopRow}>
@@ -224,7 +445,36 @@ export default function HomeScreen() {
           <Text style={styles.tripTitle}>{item.title}</Text>
           <Text style={styles.dateText}>{formatTripDates(item.date)}</Text>
         </View>
-        <Ionicons name="chevron-forward" size={20} color={colors.primary} />
+
+        {isSelecting ? (
+          /* Tapping the card is what toggles selection, so this is an
+             indicator rather than its own button. */
+          <Ionicons
+            name={isSelected ? "checkmark-circle" : "ellipse-outline"}
+            size={24}
+            color={isSelected ? colors.primary : colors.textDisabled}
+          />
+        ) : (
+          <View style={styles.tripActions}>
+            <TouchableOpacity
+              onPress={() => openEditTrip(item)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel={`Edit ${item.title}`}
+            >
+              <Ionicons name="pencil-outline" size={19} color={colors.primary} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => handleDeleteTrip(item)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel={`Delete ${item.title}`}
+            >
+              <Ionicons name="trash-outline" size={19} color={colors.danger} />
+            </TouchableOpacity>
+            <Ionicons name="chevron-forward" size={20} color={colors.primary} />
+          </View>
+        )}
       </TouchableOpacity>
     );
   };
@@ -236,17 +486,83 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Your Journeys</Text>
-      <Text style={styles.subtitle}>
-        Plan, organize, and share your adventures.
-      </Text>
+      {isSelecting ? (
+        /* Selection replaces the heading and the Plan Trip button, so the
+           only actions on screen are the ones that apply to the ticks. */
+        <View style={styles.selectionBar}>
+          <TouchableOpacity
+            onPress={exitSelection}
+            disabled={isBulkDeleting}
+            accessibilityRole="button"
+          >
+            <Text style={styles.selectionAction}>Cancel</Text>
+          </TouchableOpacity>
 
-      <AppButton
-        label="Plan Trip"
-        icon="add"
-        onPress={() => setIsModalVisible(true)}
-        style={styles.planButton}
-      />
+          <Text style={styles.selectionCount}>
+            {selectedIds.size} selected
+          </Text>
+
+          <View style={styles.selectionRight}>
+            <TouchableOpacity
+              onPress={toggleSelectAll}
+              disabled={isBulkDeleting || trips.length === 0}
+              accessibilityRole="button"
+            >
+              <Text style={styles.selectionAction}>
+                {allSelected ? "Clear" : "Select all"}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={handleDeleteSelected}
+              disabled={isBulkDeleting || selectedIds.size === 0}
+              accessibilityRole="button"
+              accessibilityLabel={`Delete ${selectedIds.size} selected trips`}
+            >
+              {isBulkDeleting ? (
+                <ActivityIndicator size="small" color={colors.danger} />
+              ) : (
+                <Ionicons
+                  name="trash-outline"
+                  size={22}
+                  color={
+                    selectedIds.size === 0 ? colors.textDisabled : colors.danger
+                  }
+                />
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : (
+        <>
+          <View style={styles.titleRow}>
+            <Text style={styles.title}>Your Journeys</Text>
+            {/* Only offered when there is something to select. */}
+            {trips.length > 0 && (
+              <TouchableOpacity
+                onPress={() => setIsSelecting(true)}
+                accessibilityRole="button"
+                accessibilityLabel="Select trips to delete"
+              >
+                <Text style={styles.selectionAction}>Select</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+          <Text style={styles.subtitle}>
+            Plan, organize, and share your adventures.
+          </Text>
+
+          <AppButton
+            label="Plan Trip"
+            icon="add"
+            onPress={() => {
+              resetTripForm();
+              setIsModalVisible(true);
+            }}
+            style={styles.planButton}
+          />
+        </>
+      )}
 
       <Modal visible={isModalVisible} animationType="slide" transparent={true}>
         {/* Keeps the Create button reachable once the keyboard is up. */}
@@ -260,7 +576,9 @@ export default function HomeScreen() {
             showsVerticalScrollIndicator={false}
           >
             <View style={styles.modalContent}>
-              <Text style={styles.modalTitle}>New Journey</Text>
+              <Text style={styles.modalTitle}>
+                {editingTripId ? "Edit Journey" : "New Journey"}
+              </Text>
 
               <FormField
                 label="Trip Title"
@@ -436,6 +754,47 @@ const makeStyles = (colors: ThemeColors) =>
     },
     // Past trips recede so upcoming ones read as the active content.
     tripCardPast: { opacity: 0.65 },
+    tripCardSelected: {
+      borderWidth: 2,
+      borderColor: colors.primary,
+      backgroundColor: colors.primarySoft,
+    },
+    tripActions: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: Spacing.md,
+    },
+
+    titleRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+    },
+    // Occupies the space the heading, subtitle and Plan Trip button leave
+    // behind, so entering selection does not shift the list under the finger.
+    selectionBar: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingVertical: Spacing.md,
+      marginBottom: Spacing.xl,
+      minHeight: 52,
+    },
+    selectionRight: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: Spacing.lg,
+    },
+    selectionCount: {
+      fontSize: FontSize.body,
+      fontFamily: FontFamily.semibold,
+      color: colors.textPrimary,
+    },
+    selectionAction: {
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.semibold,
+      color: colors.primary,
+    },
     tripInfo: { flex: 1 },
     tripCardTopRow: {
       flexDirection: "row",

@@ -13,7 +13,13 @@ const MONTHS = [
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/** A single day, as a daily-plan section header: "Tue, 12 Aug". */
+export const formatDayHeader = (d: Date) =>
+  `${WEEKDAYS[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]}`;
 
 export type TripStatus =
   | { kind: "upcoming"; daysUntil: number }

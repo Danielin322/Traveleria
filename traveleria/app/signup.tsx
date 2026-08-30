@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   KeyboardAvoidingView,
@@ -22,8 +22,58 @@ import {
   Spacing,
   ThemeColors,
 } from "../constants/theme";
+import { useCountdown } from "../hooks/useCountdown";
 import { useThemeColors } from "../contexts/ThemeContext";
-import { confirmUser, registerUser } from "../services/authService";
+import {
+  confirmUser,
+  registerUser,
+  resendVerificationCode,
+} from "../services/authService";
+
+/**
+ * How long the resend button stays closed after a code is sent.
+ *
+ * Long enough that most emails land first, so the button is not tapped
+ * reflexively; short enough not to feel stuck. It also keeps normal use well
+ * inside Cognito's own throttling.
+ */
+const RESEND_COOLDOWN_SECONDS = 60;
+
+type SignupFieldErrors = {
+  email?: string;
+  password?: string;
+  confirm?: string;
+  code?: string;
+};
+
+/**
+ * Cognito's error names turned into something a person can act on.
+ * Shared by sign-up, verification and resend, which fail in overlapping ways.
+ */
+const cognitoErrorMessage = (
+  error: unknown,
+  fallback = "An unexpected error occurred. Please try again.",
+) => {
+  switch ((error as { name?: string })?.name) {
+    case "UsernameExistsException":
+      return "This email is already registered. Please try logging in.";
+    case "InvalidPasswordException":
+      return "The password does not meet the security requirements.";
+    case "CodeMismatchException":
+      return "That code is not right. Check the latest email and try again.";
+    case "ExpiredCodeException":
+      return "That code has expired. Tap “Resend code” to get a new one.";
+    case "LimitExceededException":
+    case "TooManyRequestsException":
+      return "Too many attempts. Please wait a few minutes before requesting another code.";
+    case "UserNotFoundException":
+      return "We couldn't find that account. Please sign up again.";
+    case "NotAuthorizedException":
+      return "This account is already verified. Try logging in.";
+    default:
+      return (error as Error)?.message || fallback;
+  }
+};
 
 export default function SignupScreen() {
   const router = useRouter();
@@ -43,15 +93,35 @@ export default function SignupScreen() {
 
   const [verificationCode, setVerificationCode] = useState("");
   // State for form inputs
-  const [firstName, setFirstName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  // Per-field messages, so a failure points at the field that caused it
+  // rather than an alert that does not. Matches the event form's pattern.
+  const [fieldErrors, setFieldErrors] = useState<SignupFieldErrors>({});
+
+  const clearFieldError = (field: keyof SignupFieldErrors) =>
+    setFieldErrors((prev) =>
+      prev[field] ? { ...prev, [field]: undefined } : prev,
+    );
 
   // State to track registration success
   const [isRegistered, setIsRegistered] = useState(false);
 
   // Blocks repeat taps while a Cognito request is in flight.
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isResending, setIsResending] = useState(false);
+
+  const { secondsLeft, start: startResendCooldown } = useCountdown(
+    RESEND_COOLDOWN_SECONDS,
+  );
+
+  // The first code goes out with the sign-up itself, so the cooldown starts
+  // when the verification step appears rather than when this screen mounts.
+  useEffect(() => {
+    if (isRegistered) startResendCooldown();
+  }, [isRegistered, startResendCooldown]);
 
   // Helper function to validate email format using regex
   const isValidEmail = (email: string) => {
@@ -71,57 +141,64 @@ export default function SignupScreen() {
   const handleSignup = async () => {
     if (isSubmitting) return;
 
-    // 1. Basic empty fields check
-    if (!firstName || !email || !password) {
-      Alert.alert("Missing Information", "All fields are required.");
-      return;
-    }
+    // Checked in the order the user filled them in, so the first thing they
+    // need to fix is the first thing flagged.
+    const errors: SignupFieldErrors = {
+      email: !email.trim()
+        ? "Email is required."
+        : !isValidEmail(email)
+          ? "Enter a valid email address, e.g. name@example.com."
+          : undefined,
+      password: !password
+        ? "Password is required."
+        : !isPasswordStrong(password)
+          ? "Password does not meet the requirements below."
+          : undefined,
+      confirm: !confirmPassword
+        ? "Please re-enter your password."
+        : confirmPassword !== password
+          ? "The two passwords do not match."
+          : undefined,
+    };
+    setFieldErrors(errors);
 
-    // 2. Client-side Email validation
-    if (!isValidEmail(email)) {
-      Alert.alert(
-        "Invalid Email",
-        "Please enter a valid email address (e.g., name@example.com).",
-      );
-      return;
-    }
-
-    // 3. Client-side Password validation
-    if (!isPasswordStrong(password)) {
-      Alert.alert(
-        "Weak Password",
-        "Password must be at least 8 characters long and include an uppercase letter, a lowercase letter, a number, and a special character.",
-      );
-      return;
-    }
+    if (errors.email || errors.password || errors.confirm) return;
 
     setIsSubmitting(true);
     try {
-      const result = await registerUser({ email, password, firstName });
+      const result = await registerUser({ email, password });
 
       if (result.success) {
         setIsRegistered(true);
       } else {
-        // 4. Handle specific AWS error codes for better English messages
-        const error = result.error as any;
-        let errorMessage = "An unexpected error occurred. Please try again.";
-
-        // Mapping AWS Cognito error names to user-friendly English messages
-        if (error.name === "UsernameExistsException") {
-          errorMessage =
-            "This email is already registered. Please try logging in.";
-        } else if (error.name === "InvalidPasswordException") {
-          errorMessage =
-            "The password does not meet the security requirements.";
-        } else if (error.name === "LimitExceededException") {
-          errorMessage =
-            "Too many attempts. Please wait a moment and try again.";
-        }
-
-        Alert.alert("Registration Failed", errorMessage);
+        Alert.alert("Registration Failed", cognitoErrorMessage(result.error));
       }
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  /** Asks Cognito for a fresh code, then closes the button for another minute. */
+  const handleResendCode = async () => {
+    if (isResending || secondsLeft > 0) return;
+
+    setIsResending(true);
+    try {
+      const result = await resendVerificationCode(email);
+
+      if (result.success) {
+        // Restart before the alert, so the cooldown covers the time the user
+        // spends reading it.
+        startResendCooldown();
+        Alert.alert(
+          "Code sent",
+          `A new code is on its way to ${email}. The previous code no longer works.`,
+        );
+      } else {
+        Alert.alert("Could not resend", cognitoErrorMessage(result.error));
+      }
+    } finally {
+      setIsResending(false);
     }
   };
 
@@ -130,10 +207,10 @@ export default function SignupScreen() {
     if (isSubmitting) return;
 
     if (!verificationCode) {
-      Alert.alert(
-        "Missing Code",
-        "Please enter the 6-digit code from your email.",
-      );
+      setFieldErrors((prev) => ({
+        ...prev,
+        code: "Enter the 6-digit code from your email.",
+      }));
       return;
     }
 
@@ -152,7 +229,7 @@ export default function SignupScreen() {
       } else {
         Alert.alert(
           "Verification Failed",
-          (result.error as Error)?.message || "Invalid code.",
+          cognitoErrorMessage(result.error, "Invalid code."),
         );
       }
     } finally {
@@ -192,7 +269,11 @@ export default function SignupScreen() {
             label="Verification code"
             placeholder="6-Digit Code"
             value={verificationCode}
-            onChangeText={setVerificationCode}
+            onChangeText={(text) => {
+              setVerificationCode(text);
+              clearFieldError("code");
+            }}
+            error={fieldErrors.code}
             keyboardType="number-pad" // Opens numeric keyboard on the phone
             maxLength={6} // Limits input to 6 characters
           />
@@ -203,11 +284,28 @@ export default function SignupScreen() {
             loading={isSubmitting}
           />
 
+          {/* Held closed for a minute after each send, so the button is not
+              tapped while the first email is still on its way. */}
+          {secondsLeft > 0 ? (
+            <Text style={styles.resendWaiting}>
+              Didn&apos;t get it? Resend in {secondsLeft}s
+            </Text>
+          ) : (
+            <AppButton
+              label="Resend code"
+              variant="ghost"
+              onPress={handleResendCode}
+              loading={isResending}
+              disabled={isSubmitting}
+              style={styles.secondaryAction}
+            />
+          )}
+
           <AppButton
             label="Cancel and Go Back"
             variant="ghost"
             onPress={goBackToLogin}
-            disabled={isSubmitting}
+            disabled={isSubmitting || isResending}
             style={styles.secondaryAction}
           />
         </View>
@@ -229,18 +327,14 @@ export default function SignupScreen() {
           <Text style={styles.title}>Sign Up</Text>
 
           <FormField
-            label="First name"
-            placeholder="Your first name"
-            value={firstName}
-            onChangeText={setFirstName}
-            autoComplete="given-name"
-          />
-
-          <FormField
             label="Email"
             placeholder="name@example.com"
             value={email}
-            onChangeText={setEmail}
+            onChangeText={(text) => {
+              setEmail(text);
+              clearFieldError("email");
+            }}
+            error={fieldErrors.email}
             keyboardType="email-address"
             autoCapitalize="none"
             autoComplete="email"
@@ -250,7 +344,14 @@ export default function SignupScreen() {
             label="Password"
             placeholder="Create a password"
             value={password}
-            onChangeText={setPassword}
+            onChangeText={(text) => {
+              setPassword(text);
+              clearFieldError("password");
+              // Re-typing the password can only fix a mismatch, never cause
+              // one the user has not seen yet.
+              clearFieldError("confirm");
+            }}
+            error={fieldErrors.password}
             secureTextEntry={true}
             autoComplete="new-password"
           />
@@ -259,6 +360,27 @@ export default function SignupScreen() {
             At least 8 characters, with an uppercase and lowercase letter, a
             number and a special character.
           </Text>
+
+          <FormField
+            label="Confirm password"
+            placeholder="Re-enter your password"
+            value={confirmPassword}
+            onChangeText={(text) => {
+              setConfirmPassword(text);
+              clearFieldError("confirm");
+            }}
+            // Flagged live once both are filled in, so the mismatch is caught
+            // while the user is still looking at the field rather than at
+            // submit — but never while the confirm box is still empty.
+            error={
+              fieldErrors.confirm ??
+              (confirmPassword && password && confirmPassword !== password
+                ? "The two passwords do not match."
+                : undefined)
+            }
+            secureTextEntry={true}
+            autoComplete="new-password"
+          />
 
           <AppButton
             label="Create Account"
@@ -330,4 +452,16 @@ const makeStyles = (colors: ThemeColors) =>
       lineHeight: 17,
     },
     secondaryAction: { marginTop: Spacing.md },
+    // Occupies the same slot the enabled button will, so nothing jumps when
+    // the countdown reaches zero and the two swap.
+    resendWaiting: {
+      marginTop: Spacing.md,
+      minHeight: 52,
+      textAlignVertical: "center",
+      textAlign: "center",
+      lineHeight: 52,
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.regular,
+      color: colors.textMuted,
+    },
   });
