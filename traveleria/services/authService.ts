@@ -10,15 +10,21 @@ import {
 interface SignUpParams {
   email: string;
   password: string;
-  firstName: string;
 }
 
-export const registerUser = async ({ email, password, firstName }: SignUpParams) => {
+/**
+ * Signs the user up with email and password only.
+ *
+ * given_name used to be collected here, but nothing ever read it: auth.py
+ * stores only email and cognito_sub, and the profile's display name is typed
+ * separately in Edit Profile. The pool does not require the attribute.
+ */
+export const registerUser = async ({ email, password }: SignUpParams) => {
   try {
     const { isSignUpComplete, userId } = await signUp({
       username: email,
       password,
-      options: { userAttributes: { email, given_name: firstName } },
+      options: { userAttributes: { email } },
     });
     return { success: true, isSignUpComplete, userId };
   } catch (error) {

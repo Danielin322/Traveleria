@@ -39,6 +39,13 @@ import {
  */
 const RESEND_COOLDOWN_SECONDS = 60;
 
+type SignupFieldErrors = {
+  email?: string;
+  password?: string;
+  confirm?: string;
+  code?: string;
+};
+
 /**
  * Cognito's error names turned into something a person can act on.
  * Shared by sign-up, verification and resend, which fail in overlapping ways.
@@ -86,9 +93,18 @@ export default function SignupScreen() {
 
   const [verificationCode, setVerificationCode] = useState("");
   // State for form inputs
-  const [firstName, setFirstName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  // Per-field messages, so a failure points at the field that caused it
+  // rather than an alert that does not. Matches the event form's pattern.
+  const [fieldErrors, setFieldErrors] = useState<SignupFieldErrors>({});
+
+  const clearFieldError = (field: keyof SignupFieldErrors) =>
+    setFieldErrors((prev) =>
+      prev[field] ? { ...prev, [field]: undefined } : prev,
+    );
 
   // State to track registration success
   const [isRegistered, setIsRegistered] = useState(false);
@@ -125,33 +141,32 @@ export default function SignupScreen() {
   const handleSignup = async () => {
     if (isSubmitting) return;
 
-    // 1. Basic empty fields check
-    if (!firstName || !email || !password) {
-      Alert.alert("Missing Information", "All fields are required.");
-      return;
-    }
+    // Checked in the order the user filled them in, so the first thing they
+    // need to fix is the first thing flagged.
+    const errors: SignupFieldErrors = {
+      email: !email.trim()
+        ? "Email is required."
+        : !isValidEmail(email)
+          ? "Enter a valid email address, e.g. name@example.com."
+          : undefined,
+      password: !password
+        ? "Password is required."
+        : !isPasswordStrong(password)
+          ? "Password does not meet the requirements below."
+          : undefined,
+      confirm: !confirmPassword
+        ? "Please re-enter your password."
+        : confirmPassword !== password
+          ? "The two passwords do not match."
+          : undefined,
+    };
+    setFieldErrors(errors);
 
-    // 2. Client-side Email validation
-    if (!isValidEmail(email)) {
-      Alert.alert(
-        "Invalid Email",
-        "Please enter a valid email address (e.g., name@example.com).",
-      );
-      return;
-    }
-
-    // 3. Client-side Password validation
-    if (!isPasswordStrong(password)) {
-      Alert.alert(
-        "Weak Password",
-        "Password must be at least 8 characters long and include an uppercase letter, a lowercase letter, a number, and a special character.",
-      );
-      return;
-    }
+    if (errors.email || errors.password || errors.confirm) return;
 
     setIsSubmitting(true);
     try {
-      const result = await registerUser({ email, password, firstName });
+      const result = await registerUser({ email, password });
 
       if (result.success) {
         setIsRegistered(true);
@@ -192,10 +207,10 @@ export default function SignupScreen() {
     if (isSubmitting) return;
 
     if (!verificationCode) {
-      Alert.alert(
-        "Missing Code",
-        "Please enter the 6-digit code from your email.",
-      );
+      setFieldErrors((prev) => ({
+        ...prev,
+        code: "Enter the 6-digit code from your email.",
+      }));
       return;
     }
 
@@ -254,7 +269,11 @@ export default function SignupScreen() {
             label="Verification code"
             placeholder="6-Digit Code"
             value={verificationCode}
-            onChangeText={setVerificationCode}
+            onChangeText={(text) => {
+              setVerificationCode(text);
+              clearFieldError("code");
+            }}
+            error={fieldErrors.code}
             keyboardType="number-pad" // Opens numeric keyboard on the phone
             maxLength={6} // Limits input to 6 characters
           />
@@ -308,18 +327,14 @@ export default function SignupScreen() {
           <Text style={styles.title}>Sign Up</Text>
 
           <FormField
-            label="First name"
-            placeholder="Your first name"
-            value={firstName}
-            onChangeText={setFirstName}
-            autoComplete="given-name"
-          />
-
-          <FormField
             label="Email"
             placeholder="name@example.com"
             value={email}
-            onChangeText={setEmail}
+            onChangeText={(text) => {
+              setEmail(text);
+              clearFieldError("email");
+            }}
+            error={fieldErrors.email}
             keyboardType="email-address"
             autoCapitalize="none"
             autoComplete="email"
@@ -329,7 +344,14 @@ export default function SignupScreen() {
             label="Password"
             placeholder="Create a password"
             value={password}
-            onChangeText={setPassword}
+            onChangeText={(text) => {
+              setPassword(text);
+              clearFieldError("password");
+              // Re-typing the password can only fix a mismatch, never cause
+              // one the user has not seen yet.
+              clearFieldError("confirm");
+            }}
+            error={fieldErrors.password}
             secureTextEntry={true}
             autoComplete="new-password"
           />
@@ -338,6 +360,27 @@ export default function SignupScreen() {
             At least 8 characters, with an uppercase and lowercase letter, a
             number and a special character.
           </Text>
+
+          <FormField
+            label="Confirm password"
+            placeholder="Re-enter your password"
+            value={confirmPassword}
+            onChangeText={(text) => {
+              setConfirmPassword(text);
+              clearFieldError("confirm");
+            }}
+            // Flagged live once both are filled in, so the mismatch is caught
+            // while the user is still looking at the field rather than at
+            // submit — but never while the confirm box is still empty.
+            error={
+              fieldErrors.confirm ??
+              (confirmPassword && password && confirmPassword !== password
+                ? "The two passwords do not match."
+                : undefined)
+            }
+            secureTextEntry={true}
+            autoComplete="new-password"
+          />
 
           <AppButton
             label="Create Account"
