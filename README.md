@@ -102,7 +102,7 @@ traveleria-backend/             # Python AWS Lambda backend
 ├── shared/                     # auth (JWT + upsert), database, response, utils
 ├── sql/                        # idempotent, numbered schema migrations
 ├── scripts/init_db.py          # applies every sql/*.sql in order
-└── deploy_cloudshell.sh        # full AWS CloudShell provisioning (see warning below)
+└── deploy_cloudshell.sh        # full AWS CloudShell provisioning run
 ```
 
 ---
@@ -311,28 +311,3 @@ Then press `a` for Android, `i` for iOS, or `w` for web. Other scripts: `npm run
 > `EXPO_PUBLIC_*` variables are inlined into the client bundle and are therefore not secret. Restrict the Google key by platform, bundle id, and API.
 
 **`traveleria-backend/.env`** — `DATABASE_URL`, `COGNITO_REGION`, `COGNITO_USER_POOL_ID`, `COGNITO_APP_CLIENT_ID`. See `.env.example`. Both projects git-ignore `.env`.
-
----
-
-## Deployment
-
-### Backend
-
-`deploy_cloudshell.sh` is a full, from-scratch provisioning run in AWS CloudShell: it builds one zip per Lambda, creates or updates all five functions, rebuilds the API Gateway resource tree, and deploys the `prod` stage.
-
-> [!WARNING]
-> **The script deletes and recreates the `traveleria-api` gateway, which produces a new API id and a new API URL.** Every installed client pointing at the old URL breaks until it is rebuilt. For a routine code change, update just the one function instead:
->
-> ```bash
-> aws lambda update-function-code --function-name traveleria-trips --zip-file fileb://zips/lambda_trips.zip --region us-east-1
-> ```
-
-### Frontend
-
-```bash
-eas build --profile preview --platform android      # internal APK
-eas build --profile production --platform android   # store build
-npm run deploy                                      # OTA JS update
-```
-
-OTA updates ship JavaScript and assets only — anything touching native code needs a fresh build.
