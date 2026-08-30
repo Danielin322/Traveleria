@@ -16,6 +16,11 @@ import {
 } from "react-native";
 import { OptionSelector } from "../../components/OptionSelector";
 import {
+  dietaryLabels,
+  genderLabel,
+  parseDietary,
+} from "../../constants/profileOptions";
+import {
   Elevation,
   FontFamily,
   FontSize,
@@ -53,6 +58,8 @@ export default function ProfileScreen() {
     age: "",
     tripsCount: 0,
     interests: [] as string[],
+    gender: "",
+    dietary: [] as string[],
   });
 
   const fetchProfile = async () => {
@@ -68,6 +75,9 @@ export default function ProfileScreen() {
         age: data.age ? String(data.age) : "",
         tripsCount: data.trips_count || 0,
         interests: data.interests ? data.interests.split(",").map((i: string) => i.trim()) : [],
+        gender: data.gender || "",
+        // Arrives as a JSON array from the TEXT[] column.
+        dietary: parseDietary(data.dietary),
       });
     } catch (err) {
       // Previously swallowed, which left the screen looking blank but fine.
@@ -117,6 +127,9 @@ export default function ProfileScreen() {
         language: userData.language,
         age: userData.age,
         interests: userData.interests.join(", "),
+        gender: userData.gender,
+        // Router params are strings, so the array travels as JSON.
+        dietary: JSON.stringify(userData.dietary),
       },
     });
   };
@@ -239,6 +252,37 @@ export default function ProfileScreen() {
               {userData.age || "Not set"}
             </Text>
           </View>
+        </View>
+        <View style={styles.infoItem}>
+          <Ionicons name="person-outline" size={22} color={colors.primary} />
+          <View style={styles.infoTextContainer}>
+            <Text style={styles.infoLabel}>Gender</Text>
+            <Text
+              style={[
+                styles.infoValue,
+                !userData.gender && styles.infoValueEmpty,
+              ]}
+            >
+              {genderLabel(userData.gender) || "Not set"}
+            </Text>
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.interestsSection}>
+        <Text style={styles.sectionTitle}>Preferred nutrition</Text>
+        <View style={styles.interestsGrid}>
+          {userData.dietary.length > 0 ? (
+            dietaryLabels(userData.dietary).map((label, index) => (
+              <View key={index} style={styles.interestTag}>
+                <Text style={styles.interestText}>{label}</Text>
+              </View>
+            ))
+          ) : (
+            <Text style={styles.interestsEmpty}>
+              No dietary preferences set — tap Edit to add some.
+            </Text>
+          )}
         </View>
       </View>
 

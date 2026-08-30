@@ -3,7 +3,9 @@
  *
  * Values are the stable identifiers stored in the database; labels are what
  * the user sees. Never store the label — renaming one would orphan existing
- * rows.
+ * rows. These must stay in step with GENDER_VALUES / DIETARY_VALUES in
+ * traveleria-backend/lambdas/users/handler.py and the CHECK constraints in
+ * sql/004_user_preferences.sql.
  */
 
 import type { Option } from "../components/OptionSelector";
@@ -30,14 +32,15 @@ export const DIETARY_OPTIONS: readonly Option[] = [
 const labelFor = (options: readonly Option[], value: string) =>
   options.find((o) => o.value === value)?.label ?? value;
 
-export const genderLabel = (value?: string | null) =>
+export const genderLabel = (value?: string | null): string | null =>
   value ? labelFor(GENDER_OPTIONS, value) : null;
 
-/** Stored as a comma-separated string, matching how `interests` already works. */
-export const parseDietary = (raw?: string | null): string[] =>
-  raw ? raw.split(",").map((s) => s.trim()).filter(Boolean) : [];
+/**
+ * `dietary` is a Postgres TEXT[] and arrives as a JSON array, so no parsing is
+ * needed. This only guards against a null or unexpected shape from the API.
+ */
+export const parseDietary = (raw: unknown): string[] =>
+  Array.isArray(raw) ? raw.filter((v): v is string => typeof v === "string") : [];
 
-export const serializeDietary = (values: string[]) => values.join(", ");
-
-export const dietaryLabels = (raw?: string | null): string[] =>
+export const dietaryLabels = (raw: unknown): string[] =>
   parseDietary(raw).map((v) => labelFor(DIETARY_OPTIONS, v));

@@ -12,6 +12,12 @@ import {
 
 import { AppButton } from "../components/AppButton";
 import { FormField } from "../components/FormField";
+import { ChipMultiSelect, OptionSelector } from "../components/OptionSelector";
+import {
+  DIETARY_OPTIONS,
+  GENDER_OPTIONS,
+  parseDietary,
+} from "../constants/profileOptions";
 import {
   FontFamily,
   FontSize,
@@ -35,6 +41,15 @@ export default function EditProfileScreen() {
   const [interests, setInterests] = useState(
     (params.interests as string) || "",
   );
+  const [gender, setGender] = useState((params.gender as string) || "");
+  // Router params are strings, so the array is passed as JSON and parsed back.
+  const [dietary, setDietary] = useState<string[]>(() => {
+    try {
+      return parseDietary(JSON.parse((params.dietary as string) || "[]"));
+    } catch {
+      return [];
+    }
+  });
   // Prevents a double tap sending two PATCH requests.
   const [isSaving, setIsSaving] = useState(false);
 
@@ -51,12 +66,24 @@ export default function EditProfileScreen() {
           language,
           age: age ? parseInt(age) : null,
           interests,
+          // Omitted when unset so the backend leaves the existing value alone.
+          ...(gender ? { gender } : {}),
+          dietary,
         }),
       });
       if (response.ok) {
         router.back();
       } else {
-        Alert.alert("Error", "Could not save profile. Please try again.");
+        // Surface the server's reason (e.g. an invalid option) rather than a
+        // generic failure.
+        let detail = "Could not save profile. Please try again.";
+        try {
+          const data = await response.json();
+          detail = data?.detail || data?.error || detail;
+        } catch {
+          // Non-JSON error body; keep the generic message.
+        }
+        Alert.alert("Error", detail);
       }
     } catch (err) {
       console.error("Error saving profile:", err);
@@ -107,6 +134,27 @@ export default function EditProfileScreen() {
           maxLength={3}
         />
 
+        <View style={styles.group}>
+          <Text style={styles.label}>Gender</Text>
+          <OptionSelector
+            options={GENDER_OPTIONS}
+            value={gender || null}
+            onChange={setGender}
+          />
+        </View>
+
+        <View style={styles.group}>
+          <Text style={styles.label}>Preferred nutrition</Text>
+          <Text style={styles.hint}>
+            Pick any that apply, or none if you have no restrictions.
+          </Text>
+          <ChipMultiSelect
+            options={DIETARY_OPTIONS}
+            values={dietary}
+            onChange={setDietary}
+          />
+        </View>
+
         <FormField
           label="Interests (separated by commas)"
           value={interests}
@@ -146,6 +194,19 @@ const makeStyles = (colors: ThemeColors) =>
       color: colors.textPrimary,
     },
     textArea: { height: 100, textAlignVertical: "top" },
+    group: { marginBottom: Spacing.xl },
+    label: {
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.semibold,
+      color: colors.textSecondary,
+      marginBottom: Spacing.sm,
+    },
+    hint: {
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.regular,
+      color: colors.textMuted,
+      marginBottom: Spacing.md,
+    },
     buttonContainer: { marginTop: Spacing.xl },
     cancel: { marginTop: Spacing.sm },
   });
