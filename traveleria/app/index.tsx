@@ -1,13 +1,40 @@
 import { fetchAuthSession, getCurrentUser } from "aws-amplify/auth";
 import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
-import { Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { useEffect, useMemo, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
+
+import { AppButton } from "../components/AppButton";
+import { FormField } from "../components/FormField";
+import {
+  FontFamily,
+  FontSize,
+  Spacing,
+  ThemeColors,
+} from "../constants/theme";
+import { useThemeColors } from "../contexts/ThemeContext";
 import { signInUser } from "../services/authService";
 
 export default function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  // True until the stored session has been checked, so a signed-in user never
+  // sees the login form flash before being redirected.
+  const [checkingSession, setCheckingSession] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const router = useRouter();
+
+  const colors = useThemeColors();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   useEffect(() => {
     checkUser();
@@ -18,93 +45,138 @@ export default function LoginScreen() {
       const session = await fetchAuthSession();
       if (session.tokens) {
         const user = await getCurrentUser();
-        if (user) router.replace("/(tabs)/home");
+        if (user) {
+          router.replace("/(tabs)/home");
+          return;
+        }
       }
     } catch {
       // No active session — stay on login screen
+    } finally {
+      setCheckingSession(false);
     }
   };
 
   const handleLogin = async () => {
+    if (isSubmitting) return;
+
     if (!email || !password) {
       Alert.alert("Error", "Please enter both email and password.");
       return;
     }
 
-    const result = await signInUser(email, password);
-    if (result.success) {
-      router.replace("/(tabs)/home");
-    } else {
-      const error = result.error as any;
-      let message = "Could not log in. Please check your credentials.";
-      if (error?.name === "UserNotConfirmedException") {
-        message = "Your account is not confirmed yet. Please verify your email first.";
-      } else if (error?.name === "NotAuthorizedException") {
-        message = "Incorrect email or password.";
+    setIsSubmitting(true);
+    try {
+      const result = await signInUser(email, password);
+      if (result.success) {
+        router.replace("/(tabs)/home");
+      } else {
+        const error = result.error as any;
+        let message = "Could not log in. Please check your credentials.";
+        if (error?.name === "UserNotConfirmedException") {
+          message =
+            "Your account is not confirmed yet. Please verify your email first.";
+        } else if (error?.name === "NotAuthorizedException") {
+          message = "Incorrect email or password.";
+        }
+        Alert.alert("Login Failed", message);
       }
-      Alert.alert("Login Failed", message);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
+  if (checkingSession) {
+    return (
+      <View style={[styles.container, styles.splash]}>
+        <Text style={styles.title}>Traveleria</Text>
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  }
+
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Traveleria</Text>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      style={styles.container}
+    >
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={styles.header}>
+          <Text style={styles.title}>Traveleria</Text>
+          <Text style={styles.subtitle}>
+            Plan, organize, and share your adventures.
+          </Text>
+        </View>
 
-      <TextInput
-        style={styles.input}
-        placeholder="Email"
-        keyboardType="email-address"
-        autoCapitalize="none"
-        value={email}
-        onChangeText={setEmail}
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="Password"
-        secureTextEntry
-        value={password}
-        onChangeText={setPassword}
-      />
+        <FormField
+          label="Email"
+          placeholder="name@example.com"
+          keyboardType="email-address"
+          autoCapitalize="none"
+          autoComplete="email"
+          value={email}
+          onChangeText={setEmail}
+        />
 
-      <TouchableOpacity style={styles.button} onPress={handleLogin}>
-        <Text style={styles.buttonText}>Log In</Text>
-      </TouchableOpacity>
+        <FormField
+          label="Password"
+          placeholder="Your password"
+          secureTextEntry
+          autoComplete="password"
+          value={password}
+          onChangeText={setPassword}
+        />
 
-      <TouchableOpacity style={styles.signupButton} onPress={() => router.push("/signup")}>
-        <Text style={styles.signupButtonText}>Create a new account</Text>
-      </TouchableOpacity>
-    </View>
+        <AppButton
+          label="Log In"
+          onPress={handleLogin}
+          loading={isSubmitting}
+          style={styles.loginButton}
+        />
+
+        <TouchableOpacity
+          style={styles.signupButton}
+          onPress={() => router.push("/signup")}
+          disabled={isSubmitting}
+          accessibilityRole="button"
+        >
+          <Text style={styles.signupButtonText}>Create a new account</Text>
+        </TouchableOpacity>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#f9f9f9",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 20,
-  },
-  title: { fontSize: 40, fontWeight: "bold", color: "#1E90FF", marginBottom: 40 },
-  input: {
-    width: "100%",
-    height: 50,
-    backgroundColor: "#fff",
-    borderWidth: 1,
-    borderColor: "#ccc",
-    borderRadius: 8,
-    paddingHorizontal: 15,
-    marginBottom: 15,
-  },
-  button: {
-    width: "100%",
-    backgroundColor: "#1E90FF",
-    padding: 15,
-    borderRadius: 8,
-    alignItems: "center",
-    marginBottom: 15,
-  },
-  buttonText: { color: "#fff", fontSize: 16, fontWeight: "bold" },
-  signupButton: { marginTop: 10 },
-  signupButtonText: { color: "#1E90FF", fontSize: 16, fontWeight: "600" },
-});
+const makeStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    scrollContent: {
+      flexGrow: 1,
+      justifyContent: "center",
+      padding: Spacing.xxl,
+    },
+    splash: { alignItems: "center", justifyContent: "center" },
+    header: { alignItems: "center", marginBottom: Spacing.xxxl },
+    title: {
+      fontSize: FontSize.display,
+      fontFamily: FontFamily.bold,
+      color: colors.primary,
+      marginBottom: Spacing.sm,
+    },
+    subtitle: {
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.regular,
+      color: colors.textSecondary,
+      textAlign: "center",
+    },
+    loginButton: { marginTop: Spacing.sm },
+    signupButton: { marginTop: Spacing.xl, alignItems: "center" },
+    signupButtonText: {
+      color: colors.primary,
+      fontSize: FontSize.body,
+      fontFamily: FontFamily.semibold,
+    },
+  });

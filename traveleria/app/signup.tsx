@@ -1,20 +1,46 @@
-// 1. Imports
+import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Alert,
+  KeyboardAvoidingView,
+  Platform,
+  SafeAreaView,
+  ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
 
-// Add confirmUser to the existing import
+import { AppButton } from "../components/AppButton";
+import { FormField } from "../components/FormField";
+import {
+  FontFamily,
+  FontSize,
+  Spacing,
+  ThemeColors,
+} from "../constants/theme";
+import { useThemeColors } from "../contexts/ThemeContext";
 import { confirmUser, registerUser } from "../services/authService";
 
 export default function SignupScreen() {
   const router = useRouter();
+
+  const colors = useThemeColors();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+
+  // Return to the login screen. Falls back to a direct navigation when there is
+  // no history to pop — e.g. if signup was opened as the app's first screen.
+  const goBackToLogin = () => {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace("/");
+    }
+  };
+
   const [verificationCode, setVerificationCode] = useState("");
   // State for form inputs
   const [firstName, setFirstName] = useState("");
@@ -23,6 +49,9 @@ export default function SignupScreen() {
 
   // State to track registration success
   const [isRegistered, setIsRegistered] = useState(false);
+
+  // Blocks repeat taps while a Cognito request is in flight.
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Helper function to validate email format using regex
   const isValidEmail = (email: string) => {
@@ -40,6 +69,8 @@ export default function SignupScreen() {
   };
 
   const handleSignup = async () => {
+    if (isSubmitting) return;
+
     // 1. Basic empty fields check
     if (!firstName || !email || !password) {
       Alert.alert("Missing Information", "All fields are required.");
@@ -64,31 +95,40 @@ export default function SignupScreen() {
       return;
     }
 
-    const result = await registerUser({ email, password, firstName });
+    setIsSubmitting(true);
+    try {
+      const result = await registerUser({ email, password, firstName });
 
-    if (result.success) {
-      setIsRegistered(true);
-    } else {
-      // 4. Handle specific AWS error codes for better English messages
-      const error = result.error as any;
-      let errorMessage = "An unexpected error occurred. Please try again.";
+      if (result.success) {
+        setIsRegistered(true);
+      } else {
+        // 4. Handle specific AWS error codes for better English messages
+        const error = result.error as any;
+        let errorMessage = "An unexpected error occurred. Please try again.";
 
-      // Mapping AWS Cognito error names to user-friendly English messages
-      if (error.name === "UsernameExistsException") {
-        errorMessage =
-          "This email is already registered. Please try logging in.";
-      } else if (error.name === "InvalidPasswordException") {
-        errorMessage = "The password does not meet the security requirements.";
-      } else if (error.name === "LimitExceededException") {
-        errorMessage = "Too many attempts. Please wait a moment and try again.";
+        // Mapping AWS Cognito error names to user-friendly English messages
+        if (error.name === "UsernameExistsException") {
+          errorMessage =
+            "This email is already registered. Please try logging in.";
+        } else if (error.name === "InvalidPasswordException") {
+          errorMessage =
+            "The password does not meet the security requirements.";
+        } else if (error.name === "LimitExceededException") {
+          errorMessage =
+            "Too many attempts. Please wait a moment and try again.";
+        }
+
+        Alert.alert("Registration Failed", errorMessage);
       }
-
-      Alert.alert("Registration Failed", errorMessage);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   // Function to handle the confirmation code verification
   const handleVerify = async () => {
+    if (isSubmitting) return;
+
     if (!verificationCode) {
       Alert.alert(
         "Missing Code",
@@ -97,132 +137,197 @@ export default function SignupScreen() {
       return;
     }
 
-    const result = await confirmUser(email, verificationCode);
+    setIsSubmitting(true);
+    try {
+      const result = await confirmUser(email, verificationCode);
 
-    if (result.success) {
-      Alert.alert("Success!", "Your account is now verified. You can log in.", [
-        { text: "OK", onPress: () => router.replace("/") }, // Navigate back to the login screen
-      ]);
-    } else {
-      Alert.alert(
-        "Verification Failed",
-        (result.error as Error)?.message || "Invalid code.",
-      );
+      if (result.success) {
+        Alert.alert(
+          "Success!",
+          "Your account is now verified. You can log in.",
+          [
+            { text: "OK", onPress: () => router.replace("/") }, // Navigate back to the login screen
+          ],
+        );
+      } else {
+        Alert.alert(
+          "Verification Failed",
+          (result.error as Error)?.message || "Invalid code.",
+        );
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
+  // Shared back affordance. The root Stack hides headers, so the screen
+  // provides its own way back to login.
+  const renderBackBar = () => (
+    <View style={styles.headerBar}>
+      <TouchableOpacity
+        style={styles.backButton}
+        onPress={goBackToLogin}
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        accessibilityRole="button"
+        accessibilityLabel="Back to log in"
+      >
+        <Ionicons name="chevron-back" size={26} color={colors.primary} />
+        <Text style={styles.backButtonText}>Log In</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
   if (isRegistered) {
     return (
-      <View style={styles.container}>
-        <Text style={styles.title}>Confirm Your Account</Text>
-        <Text style={styles.message}>
-          We sent a 6-digit code to {email}. Please enter it below to activate
-          your account.
-        </Text>
-
-        <TextInput
-          style={styles.input}
-          placeholder="6-Digit Code"
-          value={verificationCode}
-          onChangeText={setVerificationCode}
-          keyboardType="number-pad" // Opens numeric keyboard on the phone
-          maxLength={6} // Limits input to 6 characters
-        />
-
-        <TouchableOpacity style={styles.button} onPress={handleVerify}>
-          <Text style={styles.buttonText}>Verify Account</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[
-            styles.button,
-            { backgroundColor: "transparent", marginTop: 15 },
-          ]}
-          onPress={() => router.back()}
-        >
-          <Text style={[styles.buttonText, { color: "#007AFF" }]}>
-            Cancel and Go Back
+      <SafeAreaView style={styles.safeArea}>
+        {renderBackBar()}
+        <View style={styles.container}>
+          <Text style={styles.title}>Confirm Your Account</Text>
+          <Text style={styles.message}>
+            We sent a 6-digit code to {email}. Please enter it below to activate
+            your account.
           </Text>
-        </TouchableOpacity>
-      </View>
+
+          <FormField
+            label="Verification code"
+            placeholder="6-Digit Code"
+            value={verificationCode}
+            onChangeText={setVerificationCode}
+            keyboardType="number-pad" // Opens numeric keyboard on the phone
+            maxLength={6} // Limits input to 6 characters
+          />
+
+          <AppButton
+            label="Verify Account"
+            onPress={handleVerify}
+            loading={isSubmitting}
+          />
+
+          <AppButton
+            label="Cancel and Go Back"
+            variant="ghost"
+            onPress={goBackToLogin}
+            disabled={isSubmitting}
+            style={styles.secondaryAction}
+          />
+        </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Sign Up</Text>
+    <SafeAreaView style={styles.safeArea}>
+      {renderBackBar()}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={styles.flex}
+      >
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+        >
+          <Text style={styles.title}>Sign Up</Text>
 
-      <TextInput
-        style={styles.input}
-        placeholder="First Name"
-        value={firstName}
-        onChangeText={setFirstName}
-      />
+          <FormField
+            label="First name"
+            placeholder="Your first name"
+            value={firstName}
+            onChangeText={setFirstName}
+            autoComplete="given-name"
+          />
 
-      <TextInput
-        style={styles.input}
-        placeholder="Email"
-        value={email}
-        onChangeText={setEmail}
-        keyboardType="email-address"
-        autoCapitalize="none"
-      />
+          <FormField
+            label="Email"
+            placeholder="name@example.com"
+            value={email}
+            onChangeText={setEmail}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoComplete="email"
+          />
 
-      <TextInput
-        style={styles.input}
-        placeholder="Password"
-        value={password}
-        onChangeText={setPassword}
-        secureTextEntry={true}
-      />
+          <FormField
+            label="Password"
+            placeholder="Create a password"
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry={true}
+            autoComplete="new-password"
+          />
+          {/* Stating the rules up front beats failing the user after submit. */}
+          <Text style={styles.hint}>
+            At least 8 characters, with an uppercase and lowercase letter, a
+            number and a special character.
+          </Text>
 
-      <TouchableOpacity style={styles.button} onPress={handleSignup}>
-        <Text style={styles.buttonText}>Create Account</Text>
-      </TouchableOpacity>
-    </View>
+          <AppButton
+            label="Create Account"
+            onPress={handleSignup}
+            loading={isSubmitting}
+          />
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    justifyContent: "center",
-    padding: 25,
-    backgroundColor: "#ffffff",
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: "bold",
-    marginBottom: 25,
-    textAlign: "center",
-    color: "#333",
-  },
-  message: {
-    fontSize: 16,
-    textAlign: "center",
-    marginBottom: 35,
-    color: "#666",
-    lineHeight: 24,
-  },
-  input: {
-    height: 55,
-    borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 10,
-    paddingHorizontal: 15,
-    marginBottom: 20,
-    fontSize: 16,
-  },
-  button: {
-    backgroundColor: "#2063e0",
-    padding: 16,
-    borderRadius: 10,
-    alignItems: "center",
-    marginTop: 10,
-  },
-  buttonText: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "600",
-  },
-});
+const makeStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    safeArea: { flex: 1, backgroundColor: colors.background },
+    flex: { flex: 1 },
+    headerBar: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: Spacing.md,
+      paddingBottom: Spacing.sm,
+      // SafeAreaView only insets on iOS, so clear Android's status bar manually.
+      paddingTop:
+        Platform.OS === "android" ? (StatusBar.currentHeight ?? 0) + 8 : 8,
+    },
+    backButton: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingVertical: Spacing.xs + 2,
+      paddingRight: Spacing.md,
+    },
+    backButtonText: {
+      color: colors.primary,
+      fontSize: FontSize.body,
+      fontFamily: FontFamily.semibold,
+      marginLeft: -4,
+    },
+    container: {
+      flex: 1,
+      justifyContent: "center",
+      padding: Spacing.xxl,
+    },
+    scrollContent: {
+      flexGrow: 1,
+      justifyContent: "center",
+      padding: Spacing.xxl,
+    },
+    title: {
+      fontSize: FontSize.h1,
+      fontFamily: FontFamily.bold,
+      marginBottom: Spacing.xxl,
+      textAlign: "center",
+      color: colors.textPrimary,
+    },
+    message: {
+      fontSize: FontSize.body,
+      fontFamily: FontFamily.regular,
+      textAlign: "center",
+      marginBottom: Spacing.xxxl,
+      color: colors.textSecondary,
+      lineHeight: 24,
+    },
+    hint: {
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.regular,
+      color: colors.textMuted,
+      marginTop: -Spacing.sm,
+      marginBottom: Spacing.xl,
+      lineHeight: 17,
+    },
+    secondaryAction: { marginTop: Spacing.md },
+  });

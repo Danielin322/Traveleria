@@ -23,15 +23,18 @@ import {
   SocialUser,
 } from "../../constants/socialMockData";
 import {
+  Elevation,
+  FontFamily,
+  FontSize,
+  Radius,
+  Spacing,
+  ThemeColors,
+} from "../../constants/theme";
+import {
   CURRENT_USER_ID,
   useCurrentUser,
 } from "../../contexts/CurrentUserContext";
-
-const PRIMARY = "#2f6deb";
-const BG = "#f4f6f8";
-const CARD = "#fff";
-const MUTED = "#888";
-const TEXT = "#1a1a1a";
+import { useThemeColors } from "../../contexts/ThemeContext";
 
 function timeAgo(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -50,6 +53,9 @@ function uid(prefix: string) {
 }
 
 export default function SocialScreen() {
+  const colors = useThemeColors();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+
   const currentUser = useCurrentUser();
   const me: SocialUser = {
     id: CURRENT_USER_ID,
@@ -274,7 +280,7 @@ export default function SocialScreen() {
           </View>
           {isMine && (
             <TouchableOpacity onPress={() => deletePost(item.id)}>
-              <Ionicons name="trash-outline" size={20} color="#e53935" />
+              <Ionicons name="trash-outline" size={20} color={colors.danger} />
             </TouchableOpacity>
           )}
         </View>
@@ -297,7 +303,7 @@ export default function SocialScreen() {
             <Ionicons
               name={liked ? "heart" : "heart-outline"}
               size={22}
-              color={liked ? "#e53935" : TEXT}
+              color={liked ? colors.danger : colors.textPrimary}
             />
             <Text style={styles.actionText}>
               {liked ? "Liked" : "Like"}
@@ -308,7 +314,7 @@ export default function SocialScreen() {
             style={styles.actionBtn}
             onPress={() => setCommentsPostId(item.id)}
           >
-            <Ionicons name="chatbubble-outline" size={20} color={TEXT} />
+            <Ionicons name="chatbubble-outline" size={20} color={colors.textPrimary} />
             <Text style={styles.actionText}>Comment</Text>
           </TouchableOpacity>
         </View>
@@ -343,7 +349,7 @@ export default function SocialScreen() {
           style={styles.newBtn}
           onPress={() => setComposerOpen(true)}
         >
-          <Ionicons name="add" size={22} color="#fff" />
+          <Ionicons name="add" size={22} color={colors.primaryContrast} />
           <Text style={styles.newBtnText}>Post</Text>
         </TouchableOpacity>
       </View>
@@ -367,6 +373,7 @@ export default function SocialScreen() {
             <TextInput
               style={styles.composerInput}
               placeholder="Share an experience..."
+              placeholderTextColor={colors.textDisabled}
               value={draftText}
               onChangeText={setDraftText}
               multiline
@@ -391,14 +398,14 @@ export default function SocialScreen() {
                 style={styles.iconBtn}
                 onPress={() => pickImage(false)}
               >
-                <Ionicons name="image-outline" size={22} color={PRIMARY} />
+                <Ionicons name="image-outline" size={22} color={colors.primary} />
                 <Text style={styles.iconBtnText}>Gallery</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.iconBtn}
                 onPress={() => pickImage(true)}
               >
-                <Ionicons name="camera-outline" size={22} color={PRIMARY} />
+                <Ionicons name="camera-outline" size={22} color={colors.primary} />
                 <Text style={styles.iconBtnText}>Camera</Text>
               </TouchableOpacity>
             </View>
@@ -527,7 +534,7 @@ export default function SocialScreen() {
                   setCommentDraft("");
                 }}
               >
-                <Ionicons name="close" size={26} color="#e53935" />
+                <Ionicons name="close" size={26} color={colors.danger} />
               </TouchableOpacity>
             </View>
 
@@ -573,7 +580,7 @@ export default function SocialScreen() {
                             }
                           >
                             <Text
-                              style={[styles.replyLink, { color: "#e53935" }]}
+                              style={[styles.replyLink, { color: colors.danger }]}
                             >
                               Delete
                             </Text>
@@ -610,7 +617,7 @@ export default function SocialScreen() {
                               <Text
                                 style={[
                                   styles.replyLink,
-                                  { color: "#e53935" },
+                                  { color: colors.danger },
                                 ]}
                               >
                                 Delete
@@ -633,7 +640,7 @@ export default function SocialScreen() {
                   Replying to {replyTarget.userName}
                 </Text>
                 <TouchableOpacity onPress={() => setReplyTarget(null)}>
-                  <Ionicons name="close" size={18} color={MUTED} />
+                  <Ionicons name="close" size={18} color={colors.textMuted} />
                 </TouchableOpacity>
               </View>
             )}
@@ -644,6 +651,7 @@ export default function SocialScreen() {
                 placeholder={
                   replyTarget ? "Write a reply..." : "Add a comment..."
                 }
+                placeholderTextColor={colors.textDisabled}
                 value={commentDraft}
                 onChangeText={setCommentDraft}
                 multiline
@@ -652,7 +660,7 @@ export default function SocialScreen() {
                 style={styles.sendBtn}
                 onPress={submitComment}
               >
-                <Ionicons name="send" size={20} color="#fff" />
+                <Ionicons name="send" size={20} color={colors.primaryContrast} />
               </TouchableOpacity>
             </View>
           </View>
@@ -662,28 +670,29 @@ export default function SocialScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: BG, padding: 20, paddingTop: 60 },
+const makeStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.background, padding: 20, paddingTop: 60 },
   headerRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: 18,
   },
-  title: { fontSize: 30, fontWeight: "bold", color: TEXT },
-  subtitle: { fontSize: 14, color: MUTED, marginTop: 2 },
+  title: { fontSize: 30, fontWeight: "bold", color: colors.textPrimary },
+  subtitle: { fontSize: 14, color: colors.textMuted, marginTop: 2 },
   newBtn: {
-    backgroundColor: PRIMARY,
+    backgroundColor: colors.primary,
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 20,
   },
-  newBtnText: { color: "#fff", fontWeight: "bold", marginLeft: 4 },
+  newBtnText: { color: colors.surface, fontWeight: "bold", marginLeft: 4 },
 
   postCard: {
-    backgroundColor: CARD,
+    backgroundColor: colors.surface,
     borderRadius: 15,
     padding: 14,
     marginBottom: 14,
@@ -694,20 +703,20 @@ const styles = StyleSheet.create({
   },
   postHeader: { flexDirection: "row", alignItems: "center", marginBottom: 10 },
   avatar: { width: 40, height: 40, borderRadius: 20, marginRight: 10 },
-  userName: { fontSize: 15, fontWeight: "bold", color: TEXT },
-  timestamp: { fontSize: 12, color: MUTED, marginTop: 1 },
-  postText: { fontSize: 15, color: TEXT, lineHeight: 21, marginBottom: 10 },
+  userName: { fontSize: 15, fontWeight: "bold", color: colors.textPrimary },
+  timestamp: { fontSize: 12, color: colors.textMuted, marginTop: 1 },
+  postText: { fontSize: 15, color: colors.textPrimary, lineHeight: 21, marginBottom: 10 },
   postImage: {
     width: "100%",
     height: 240,
     borderRadius: 12,
     marginBottom: 8,
-    backgroundColor: "#eee",
+    backgroundColor: colors.border,
   },
   actionsRow: {
     flexDirection: "row",
     borderTopWidth: 1,
-    borderTopColor: "#eee",
+    borderTopColor: colors.border,
     paddingTop: 8,
     marginTop: 4,
   },
@@ -716,8 +725,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginRight: 22,
   },
-  actionText: { marginLeft: 6, color: TEXT, fontWeight: "500" },
-  metaText: { fontSize: 13, color: MUTED, marginTop: 6 },
+  actionText: { marginLeft: 6, color: colors.textPrimary, fontWeight: "500" },
+  metaText: { fontSize: 13, color: colors.textMuted, marginTop: 6 },
 
   modalOverlay: {
     flex: 1,
@@ -726,7 +735,7 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   modalContent: {
-    backgroundColor: "#fff",
+    backgroundColor: colors.surface,
     borderRadius: 20,
     padding: 22,
   },
@@ -739,12 +748,15 @@ const styles = StyleSheet.create({
   composerInput: {
     minHeight: 90,
     borderWidth: 1,
-    borderColor: "#ddd",
+    borderColor: colors.border,
     borderRadius: 12,
     padding: 12,
     fontSize: 15,
     textAlignVertical: "top",
     marginBottom: 12,
+    // Without an explicit colour a TextInput renders black in both themes.
+    color: colors.textPrimary,
+    backgroundColor: colors.surfaceSunken,
   },
   draftImageWrap: { position: "relative", marginBottom: 12 },
   draftImage: { width: "100%", height: 180, borderRadius: 12 },
@@ -765,11 +777,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingVertical: 8,
     paddingHorizontal: 12,
-    backgroundColor: "#eef2ff",
+    backgroundColor: colors.primarySoft,
     borderRadius: 10,
     marginRight: 10,
   },
-  iconBtnText: { marginLeft: 6, color: PRIMARY, fontWeight: "600" },
+  iconBtnText: { marginLeft: 6, color: colors.primary, fontWeight: "600" },
 
   modalButtons: { flexDirection: "row", justifyContent: "space-between" },
   modalButton: {
@@ -779,15 +791,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginHorizontal: 4,
   },
-  cancelButton: { backgroundColor: "#eee" },
-  saveButton: { backgroundColor: PRIMARY },
-  cancelButtonText: { color: "#666", fontWeight: "bold" },
-  saveButtonText: { color: "#fff", fontWeight: "bold" },
+  cancelButton: { backgroundColor: colors.border },
+  saveButton: { backgroundColor: colors.primary },
+  cancelButtonText: { color: colors.textSecondary, fontWeight: "bold" },
+  saveButtonText: { color: colors.surface, fontWeight: "bold" },
 
   likeRow: { flexDirection: "row", alignItems: "center", paddingVertical: 8 },
   smallAvatar: { width: 36, height: 36, borderRadius: 18, marginRight: 10 },
   tinyAvatar: { width: 28, height: 28, borderRadius: 14, marginRight: 8 },
-  likeName: { fontSize: 15, color: TEXT },
+  likeName: { fontSize: 15, color: colors.textPrimary },
 
   commentsOverlay: {
     flex: 1,
@@ -795,7 +807,7 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
   },
   commentsSheet: {
-    backgroundColor: "#fff",
+    backgroundColor: colors.surface,
     borderTopLeftRadius: 22,
     borderTopRightRadius: 22,
     paddingHorizontal: 18,
@@ -811,7 +823,7 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     textAlign: "center",
-    color: MUTED,
+    color: colors.textMuted,
     marginTop: 30,
     fontSize: 14,
   },
@@ -823,44 +835,47 @@ const styles = StyleSheet.create({
     marginTop: 10,
     marginLeft: 46,
   },
-  commentName: { fontWeight: "bold", color: TEXT, fontSize: 14 },
-  commentText: { color: TEXT, fontSize: 14, marginTop: 2 },
+  commentName: { fontWeight: "bold", color: colors.textPrimary, fontSize: 14 },
+  commentText: { color: colors.textPrimary, fontSize: 14, marginTop: 2 },
   commentMetaRow: { flexDirection: "row", alignItems: "center", marginTop: 4 },
-  commentMeta: { fontSize: 12, color: MUTED, marginRight: 14 },
-  replyLink: { fontSize: 12, color: PRIMARY, fontWeight: "600", marginRight: 14 },
+  commentMeta: { fontSize: 12, color: colors.textMuted, marginRight: 14 },
+  replyLink: { fontSize: 12, color: colors.primary, fontWeight: "600", marginRight: 14 },
 
   replyBanner: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    backgroundColor: "#eef2ff",
+    backgroundColor: colors.primarySoft,
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 10,
     marginBottom: 6,
   },
-  replyBannerText: { color: PRIMARY, fontSize: 13, fontWeight: "600" },
+  replyBannerText: { color: colors.primary, fontSize: 13, fontWeight: "600" },
 
   commentInputRow: {
     flexDirection: "row",
     alignItems: "flex-end",
     paddingTop: 6,
     borderTopWidth: 1,
-    borderTopColor: "#eee",
+    borderTopColor: colors.border,
   },
   commentInput: {
     flex: 1,
     maxHeight: 100,
     borderWidth: 1,
-    borderColor: "#ddd",
+    borderColor: colors.border,
     borderRadius: 18,
     paddingHorizontal: 14,
     paddingVertical: 8,
     fontSize: 14,
     marginRight: 8,
+    // Without an explicit colour a TextInput renders black in both themes.
+    color: colors.textPrimary,
+    backgroundColor: colors.surfaceSunken,
   },
   sendBtn: {
-    backgroundColor: PRIMARY,
+    backgroundColor: colors.primary,
     width: 40,
     height: 40,
     borderRadius: 20,
