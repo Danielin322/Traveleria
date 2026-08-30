@@ -30,15 +30,22 @@ BEGIN
         -- reads '{Love,sports_events}'. Splitting that on commas would weld
         -- the braces onto the first and last entries ('{Love'), so those rows
         -- are cast directly instead.
+        -- No subquery below: a USING transform expression may not contain
+        -- one, so the comma split is done with array functions instead of
+        -- unnest + array_agg. regexp_replace collapses the whitespace around
+        -- each comma so " a , b " splits to {a,b}, and array_remove drops the
+        -- empty element a trailing comma would leave behind.
         ALTER TABLE users
             ALTER COLUMN interests TYPE TEXT[]
             USING CASE
                 WHEN interests IS NULL OR btrim(interests) = '' THEN '{}'::TEXT[]
                 WHEN btrim(interests) LIKE '{%}' THEN btrim(interests)::TEXT[]
-                ELSE (
-                    SELECT COALESCE(array_agg(btrim(part)), '{}')
-                    FROM unnest(string_to_array(interests, ',')) AS part
-                    WHERE btrim(part) <> ''
+                ELSE array_remove(
+                    string_to_array(
+                        regexp_replace(btrim(interests), '\s*,\s*', ',', 'g'),
+                        ','
+                    ),
+                    ''
                 )
             END;
 
