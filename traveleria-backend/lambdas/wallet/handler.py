@@ -146,7 +146,7 @@ def _list_documents(current_user):
         # hiding them keeps a failed attempt from showing as a broken card.
         db.execute(
             """
-            SELECT id, title, color, icon, mime_type, file_name, s3_key, trip_id, created_at
+            SELECT id, title, color, icon, mime_type, file_name, s3_key, created_at
             FROM wallet_documents
             WHERE user_id = %s
               AND (upload_status = 'ready' OR created_at > NOW() - INTERVAL '1 hour')
@@ -164,7 +164,6 @@ def _list_documents(current_user):
             "icon": row["icon"],
             "mimeType": row["mime_type"],
             "fileName": row["file_name"],
-            "tripId": str(row["trip_id"]) if row["trip_id"] else None,
             "url": _view_url(row["s3_key"]),
         }
         for row in rows
