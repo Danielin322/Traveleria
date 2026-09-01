@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useLocalSearchParams } from "expo-router";
+import { Stack, useLocalSearchParams } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -21,6 +21,8 @@ import {
 } from "react-native";
 import { GooglePlacesAutocomplete } from "react-native-google-places-autocomplete";
 import MapView, { Marker } from "react-native-maps";
+import { TripDayTimePicker } from "../components/TripDayTimePicker";
+import { DARK_MAP_STYLE } from "../constants/mapStyle";
 import {
   Elevation,
   FontFamily,
@@ -29,8 +31,6 @@ import {
   Spacing,
   ThemeColors,
 } from "../constants/theme";
-import { DARK_MAP_STYLE } from "../constants/mapStyle";
-import { TripDayTimePicker } from "../components/TripDayTimePicker";
 import { useTheme } from "../contexts/ThemeContext";
 import { apiFetch } from "../services/apiClient";
 import { DaySection, groupEventsByDay, sortEvents } from "../utils/itinerary";
@@ -126,10 +126,7 @@ export default function TripDetailsScreen() {
    * opened without the `date` param — then the calendar is simply unbounded
    * rather than the screen refusing to work.
    */
-  const tripRange = useMemo(
-    () => parseDateRange(String(date ?? "")),
-    [date],
-  );
+  const tripRange = useMemo(() => parseDateRange(String(date ?? "")), [date]);
 
   /** Both halves of "when" arrive together, so they are set together. */
   const handleConfirmWhen = (pickedDate: Date, pickedTime: string) => {
@@ -230,7 +227,9 @@ export default function TripDetailsScreen() {
       if (response.ok) {
         if (editingEventId) {
           setItinerary((prev) =>
-            sortEvents(prev.map((e) => (e.id === editingEventId ? eventData : e))),
+            sortEvents(
+              prev.map((e) => (e.id === editingEventId ? eventData : e)),
+            ),
           );
         } else {
           const data = await response.json();
@@ -528,7 +527,9 @@ export default function TripDetailsScreen() {
         />
         <View style={styles.emptyDayText}>
           <Text style={styles.emptyDayTitle}>Nothing planned yet</Text>
-          <Text style={styles.emptyDayHint}>Tap to add something to this day</Text>
+          <Text style={styles.emptyDayHint}>
+            Tap to add something to this day
+          </Text>
         </View>
       </TouchableOpacity>
     );
@@ -574,7 +575,11 @@ export default function TripDetailsScreen() {
               style={{ padding: 15 }}
               onPress={() => openEditModal(item)}
             >
-              <Ionicons name="pencil-outline" size={20} color={colors.primary} />
+              <Ionicons
+                name="pencil-outline"
+                size={20}
+                color={colors.primary}
+              />
             </TouchableOpacity>
             {/* Delete icon button on the right side of the card */}
             <TouchableOpacity
@@ -625,6 +630,9 @@ export default function TripDetailsScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
+      {/* Disables the modal's swipe-down-to-dismiss only while chatting, so
+          the sole way out of the chat is the "Back to Itinerary" button. */}
+      <Stack.Screen options={{ gestureEnabled: viewMode !== "chat" }} />
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         style={styles.container}
@@ -662,7 +670,13 @@ export default function TripDetailsScreen() {
                     {selectedIds.size} selected
                   </Text>
 
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 14,
+                    }}
+                  >
                     <TouchableOpacity
                       onPress={toggleSelectAll}
                       disabled={isBulkDeleting || itinerary.length === 0}
@@ -700,7 +714,13 @@ export default function TripDetailsScreen() {
                 <>
                   <Text style={styles.sectionTitle}>Daily Plan</Text>
 
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 10,
+                    }}
+                  >
                     {/* Only offered when there is something to select. */}
                     {itinerary.length > 0 && !isMapView && (
                       <TouchableOpacity
@@ -727,7 +747,11 @@ export default function TripDetailsScreen() {
                       style={styles.addButton}
                       onPress={() => setIsModalVisible(true)}
                     >
-                      <Ionicons name="add" size={20} color={colors.primaryContrast} />
+                      <Ionicons
+                        name="add"
+                        size={20}
+                        color={colors.primaryContrast}
+                      />
                       <Text style={styles.addButtonText}>Add Event</Text>
                     </TouchableOpacity>
                   </View>
@@ -808,7 +832,11 @@ export default function TripDetailsScreen() {
                         )
                       }
                     >
-                      <Ionicons name="navigate" size={18} color={colors.primaryContrast} />
+                      <Ionicons
+                        name="navigate"
+                        size={18}
+                        color={colors.primaryContrast}
+                      />
                       <Text style={styles.navigateButtonText}>Navigate</Text>
                     </TouchableOpacity>
                   </View>
@@ -829,7 +857,11 @@ export default function TripDetailsScreen() {
                 ListHeaderComponent={
                   itinerary.length === 0 ? (
                     <View style={styles.emptyState}>
-                      <Ionicons name="calendar-outline" size={48} color={colors.textDisabled} />
+                      <Ionicons
+                        name="calendar-outline"
+                        size={48}
+                        color={colors.textDisabled}
+                      />
                       <Text style={styles.emptyText}>No events yet.</Text>
                       <Text style={styles.emptySubText}>
                         Tap a day below, or “Add Event”, to start planning.
@@ -1043,7 +1075,10 @@ export default function TripDetailsScreen() {
                         disabled={isSubmitting}
                       >
                         {isSubmitting ? (
-                          <ActivityIndicator size="small" color={colors.primaryContrast} />
+                          <ActivityIndicator
+                            size="small"
+                            color={colors.primaryContrast}
+                          />
                         ) : (
                           <Text style={styles.saveButtonText}>
                             {editingEventId ? "Save Changes" : "Create"}
@@ -1063,7 +1098,11 @@ export default function TripDetailsScreen() {
                 style={styles.fab}
                 onPress={() => setViewMode("chat")}
               >
-                <Ionicons name="chatbubble-ellipses" size={30} color={colors.primaryContrast} />
+                <Ionicons
+                  name="chatbubble-ellipses"
+                  size={30}
+                  color={colors.primaryContrast}
+                />
               </TouchableOpacity>
             )}
           </View>
@@ -1096,8 +1135,12 @@ export default function TripDetailsScreen() {
                 // from the first one can still catch a mid-settling jump.
                 // Debouncing instead means we only reveal once the size has
                 // stopped changing, at the true final scroll position.
-                if (chatRevealTimer.current) clearTimeout(chatRevealTimer.current);
-                chatRevealTimer.current = setTimeout(() => setIsChatReady(true), 100);
+                if (chatRevealTimer.current)
+                  clearTimeout(chatRevealTimer.current);
+                chatRevealTimer.current = setTimeout(
+                  () => setIsChatReady(true),
+                  100,
+                );
               }}
               renderItem={({ item }) => (
                 <View
@@ -1130,7 +1173,9 @@ export default function TripDetailsScreen() {
                     ]}
                   >
                     <ActivityIndicator size="small" color={colors.primary} />
-                    <Text style={styles.typingText}>Traveleria AI is typing…</Text>
+                    <Text style={styles.typingText}>
+                      Traveleria AI is typing…
+                    </Text>
                   </View>
                 ) : null
               }
