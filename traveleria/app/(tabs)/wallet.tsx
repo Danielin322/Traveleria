@@ -247,13 +247,17 @@ export default function WalletScreen() {
     const ink = readableTextColor(cardColor);
 
     return (
-      <TouchableOpacity activeOpacity={0.9} onPress={() => setSelectedDoc(item)}>
-        <Animated.View
-          style={[
-            styles.card,
-            { backgroundColor: cardColor, marginTop: index === 0 ? 0 : -100 },
-          ]}
-        >
+      <TouchableOpacity
+        activeOpacity={0.9}
+        onPress={() => setSelectedDoc(item)}
+        // The overlap lives on the touchable, not on the card inside it. With
+        // the negative margin on the child, this view measured 100px tall
+        // while the card drew 200px, so the lower half of every card fell
+        // outside its own touch target — visible, but dead to taps on
+        // Android. Offsetting the target itself keeps the two boxes identical.
+        style={{ marginTop: index === 0 ? 0 : -100 }}
+      >
+        <Animated.View style={[styles.card, { backgroundColor: cardColor }]}>
           {/* Cards overlap by 100px, so only this header strip is reliably
               visible — everything identifying the card has to live here. */}
           <View style={styles.cardHeader}>
