@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -11,6 +11,7 @@ import {
   Modal,
   Platform,
   SafeAreaView,
+  SectionList,
   StyleSheet,
   Text,
   TextInput,
@@ -19,9 +20,35 @@ import {
   View,
 } from "react-native";
 import { GooglePlacesAutocomplete } from "react-native-google-places-autocomplete";
-import DateTimePickerModal from "react-native-modal-datetime-picker";
 import MapView, { Marker } from "react-native-maps";
+import {
+  Elevation,
+  FontFamily,
+  FontSize,
+  Radius,
+  Spacing,
+  ThemeColors,
+} from "../constants/theme";
+import { DARK_MAP_STYLE } from "../constants/mapStyle";
+import { TripDayTimePicker } from "../components/TripDayTimePicker";
+import { useTheme } from "../contexts/ThemeContext";
 import { apiFetch } from "../services/apiClient";
+import { DaySection, groupEventsByDay, sortEvents } from "../utils/itinerary";
+import {
+  LIMITS,
+  formatDate,
+  parseDate,
+  parseDateRange,
+  validateActivity,
+  validateNotes,
+} from "../utils/validation";
+
+type EventFieldErrors = {
+  place?: string;
+  activity?: string;
+  when?: string;
+  notes?: string;
+};
 
 const renderMessageText = (text: string) =>
   text.split(/(\*\*.*?\*\*)/g).map((part, index) =>
@@ -36,6 +63,9 @@ const renderMessageText = (text: string) =>
 
 export default function TripDetailsScreen() {
   const { id, title, location, date } = useLocalSearchParams();
+
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   const [viewMode, setViewMode] = useState<"itinerary" | "chat">("itinerary");
   const [loading, setLoading] = useState(true);
@@ -52,29 +82,67 @@ export default function TripDetailsScreen() {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [newActivity, setNewActivity] = useState("");
   const [newTime, setNewTime] = useState("");
+  const [newDate, setNewDate] = useState<Date | null>(null);
   const [newPlace, setNewPlace] = useState("");
-  const [isTimePickerVisible, setTimePickerVisible] = useState(false);
+  const [isWhenPickerVisible, setWhenPickerVisible] = useState(false);
   const [newLat, setNewLat] = useState<number | null>(null);
   const [newLng, setNewLng] = useState<number | null>(null);
   const [isMapView, setIsMapView] = useState(false);
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<any | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<EventFieldErrors>({});
+  // Guards the event form against double submission.
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  // Drives the "typing" bubble while the assistant composes a reply.
+  const [isAiTyping, setIsAiTyping] = useState(false);
+  // Bulk edit: tick several events, remove them in one action.
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const googlePlacesRef = useRef<any>(null);
-  const handleConfirmTime = (date: Date) => {
-    const hours = date.getHours().toString().padStart(2, "0");
-    const minutes = date.getMinutes().toString().padStart(2, "0");
-    setNewTime(`${hours}:${minutes}`);
-    setTimePickerVisible(false);
+
+  /**
+   * The trip's own dates, which bound the day picker. Null when the screen was
+   * opened without the `date` param — then the calendar is simply unbounded
+   * rather than the screen refusing to work.
+   */
+  const tripRange = useMemo(
+    () => parseDateRange(String(date ?? "")),
+    [date],
+  );
+
+  /** Both halves of "when" arrive together, so they are set together. */
+  const handleConfirmWhen = (pickedDate: Date, pickedTime: string) => {
+    setNewDate(pickedDate);
+    setNewTime(pickedTime);
+    setFieldErrors((prev) => ({ ...prev, when: undefined }));
+    setWhenPickerVisible(false);
   };
 
-  const sortByTime = (items: any[]) =>
-    [...items].sort((a, b) => a.time.localeCompare(b.time));
+  /** Clears one field's error as soon as the user starts correcting it. */
+  const clearFieldError = (field: keyof EventFieldErrors) =>
+    setFieldErrors((prev) =>
+      prev[field] ? { ...prev, [field]: undefined } : prev,
+    );
+
+  const resetEventForm = () => {
+    setEditingEventId(null);
+    setNewActivity("");
+    setNewTime("");
+    setNewDate(null);
+    setNewPlace("");
+    setNewLat(null);
+    setNewLng(null);
+    setNewNotes("");
+    setFieldErrors({});
+    googlePlacesRef.current?.setAddressText("");
+  };
 
   const fetchItinerary = async () => {
     try {
       const response = await apiFetch(`/trips/${id}/itinerary`);
       const data = await response.json();
-      setItinerary(sortByTime(data));
+      setItinerary(sortEvents(data));
     } catch (error) {
       console.error("Error fetching itinerary:", error);
     } finally {
@@ -83,41 +151,48 @@ export default function TripDetailsScreen() {
   };
 
   const handleAddEvent = async () => {
-    // Log the current state values to see what is missing during edit
-    console.log("Edit Check:", {
-      newActivity,
-      newTime,
-      newPlace,
-      newLat,
-      newLng,
-      newNotes,
-    });
+    // Ignore repeat taps while the first request is still in flight.
+    if (isSubmitting) return;
 
-    // Ensure all fields including coordinates are present and not undefined
-    if (
-      !newActivity ||
-      !newTime ||
-      !newPlace ||
-      newLat === null ||
-      newLat === undefined ||
-      newLng === null ||
-      newLng === undefined
-    ) {
-      alert(
-        "Please make sure to select a valid location from the search suggestions so coordinates are saved.",
-      );
-      return;
-    }
+    // A place is only usable once it carries coordinates, which the Google
+    // Places autocomplete attaches when a suggestion is actually tapped.
+    const hasCoordinates =
+      newLat !== null &&
+      newLat !== undefined &&
+      newLng !== null &&
+      newLng !== undefined;
+
+    const errors: EventFieldErrors = {
+      place: !newPlace.trim()
+        ? "Place is required."
+        : !hasCoordinates
+          ? "Pick a place from the suggestions so its location is saved."
+          : undefined,
+      activity: validateActivity(newActivity) ?? undefined,
+      when: !newDate
+        ? "Please choose a date and time."
+        : !newTime
+          ? "Please choose a time."
+          : undefined,
+      notes: validateNotes(newNotes) ?? undefined,
+    };
+    setFieldErrors(errors);
+
+    if (errors.place || errors.activity || errors.when || errors.notes) return;
+
+    setIsSubmitting(true);
 
     const eventData = {
       // Keep the existing ID if we are editing, otherwise generate a new one
       id: editingEventId ? editingEventId : Math.random().toString(),
+      // Non-null: the validation above guarantees a date is set.
+      date: formatDate(newDate!),
       time: newTime,
-      place: newActivity,
-      address: newPlace,
+      place: newActivity.trim(),
+      address: newPlace.trim(),
       lat: newLat,
       lng: newLng,
-      notes: newNotes,
+      notes: newNotes.trim(),
     };
 
     try {
@@ -135,34 +210,33 @@ export default function TripDetailsScreen() {
       if (response.ok) {
         if (editingEventId) {
           setItinerary((prev) =>
-            sortByTime(prev.map((e) => (e.id === editingEventId ? eventData : e))),
+            sortEvents(prev.map((e) => (e.id === editingEventId ? eventData : e))),
           );
         } else {
           const data = await response.json();
-          setItinerary((prev) => sortByTime([...prev, data.item]));
+          setItinerary((prev) => sortEvents([...prev, data.item]));
         }
 
         // Reset form and close modal
         setIsModalVisible(false);
-        setEditingEventId(null);
-        setNewActivity("");
-        setNewTime("");
-        setNewPlace("");
-        setNewLat(null);
-        setNewLng(null);
-        setNewNotes("");
-
-        if (googlePlacesRef.current) {
-          googlePlacesRef.current.setAddressText("");
-        }
+        resetEventForm();
       } else {
         // Read the exact error message from the server
         const errorText = await response.text();
         console.error("Server rejected the save:", response.status, errorText);
-        alert(`Server error ${response.status}. Check terminal for details.`);
+        Alert.alert(
+          "Could not save event",
+          `The server rejected the request (${response.status}). Please try again.`,
+        );
       }
     } catch (error) {
       console.error("Error saving event:", error);
+      Alert.alert(
+        "Connection problem",
+        "Could not reach the server. Check your connection and try again.",
+      );
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -205,8 +279,103 @@ export default function TripDetailsScreen() {
     );
   };
 
+  /* ---------------------------------------------------------------- */
+  /* Bulk selection                                                     */
+  /* ---------------------------------------------------------------- */
+
+  /** Leaving selection always drops the ticks, so no id can go stale. */
+  const exitSelection = () => {
+    setIsSelecting(false);
+    setSelectedIds(new Set());
+  };
+
+  const enterSelection = (eventId: string) => {
+    setIsSelecting(true);
+    setSelectedIds(new Set([eventId]));
+  };
+
+  const toggleSelected = (eventId: string) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(eventId)) next.delete(eventId);
+      else next.add(eventId);
+      return next;
+    });
+
+  const allSelected =
+    itinerary.length > 0 && selectedIds.size === itinerary.length;
+
+  const toggleSelectAll = () =>
+    setSelectedIds(
+      allSelected ? new Set() : new Set(itinerary.map((e) => e.id)),
+    );
+
+  const handleDeleteSelected = () => {
+    if (isBulkDeleting || selectedIds.size === 0) return;
+
+    const count = selectedIds.size;
+    Alert.alert(
+      `Delete ${count} ${count === 1 ? "event" : "events"}?`,
+      "This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            setIsBulkDeleting(true);
+            const ids = [...selectedIds];
+            try {
+              // One request per event, over the endpoint that already exists.
+              // allSettled rather than all: one failure must not abandon the
+              // deletions that did go through.
+              const results = await Promise.allSettled(
+                ids.map((eventId) =>
+                  apiFetch(`/trips/${id}/itinerary/${eventId}`, {
+                    method: "DELETE",
+                  }),
+                ),
+              );
+
+              const deleted = new Set(
+                ids.filter(
+                  (_, i) =>
+                    results[i].status === "fulfilled" &&
+                    (results[i] as PromiseFulfilledResult<Response>).value.ok,
+                ),
+              );
+
+              setItinerary((prev) => prev.filter((e) => !deleted.has(e.id)));
+
+              const failed = ids.filter((eventId) => !deleted.has(eventId));
+              if (failed.length > 0) {
+                // Keep the ones that failed ticked so a retry is one tap.
+                setSelectedIds(new Set(failed));
+                Alert.alert(
+                  "Some events were not deleted",
+                  `${failed.length} of ${ids.length} could not be removed. They are still selected — tap delete to try again.`,
+                );
+              } else {
+                exitSelection();
+              }
+            } catch (error) {
+              console.error("Error deleting events:", error);
+              Alert.alert(
+                "Connection problem",
+                "Could not reach the server. Check your connection and try again.",
+              );
+            } finally {
+              setIsBulkDeleting(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
   const sendMessage = async () => {
-    if (inputText.trim() === "") return;
+    // Also ignore a second send while the assistant is still replying.
+    if (inputText.trim() === "" || isAiTyping) return;
 
     const userMessage = {
       id: Date.now().toString(),
@@ -217,6 +386,7 @@ export default function TripDetailsScreen() {
 
     const currentInput = inputText;
     setInputText("");
+    setIsAiTyping(true);
 
     try {
       const response = await apiFetch("/chat", {
@@ -232,7 +402,7 @@ export default function TripDetailsScreen() {
       ]);
 
       if (data.added_items?.length) {
-        setItinerary((prev) => sortByTime([...prev, ...data.added_items]));
+        setItinerary((prev) => sortEvents([...prev, ...data.added_items]));
       }
 
       if (data.removed_item_ids?.length) {
@@ -245,11 +415,13 @@ export default function TripDetailsScreen() {
       setMessages((prev) => [
         ...prev,
         {
-          id: "error",
+          id: `error-${Date.now()}`,
           text: "Sorry, I'm having trouble connecting to the server.",
           isUser: false,
         },
       ]);
+    } finally {
+      setIsAiTyping(false);
     }
   };
   const handleNavigate = (lat: number, lng: number, label: string) => {
@@ -278,42 +450,131 @@ export default function TripDetailsScreen() {
     fetchItinerary();
   }, []);
 
-  const renderEventCard = ({ item }: { item: any }) => (
-    <View style={styles.eventCard}>
-      <View style={styles.eventTimeBlock}>
-        <Text style={styles.eventTime}>{item.time}</Text>
-      </View>
-      <View style={styles.eventDivider} />
-      <View style={styles.eventInfo}>
-        <Text style={styles.eventActivity}>{item.place}</Text>
-        <Text style={styles.eventPlace}>{item.address}</Text>
-      </View>
+  const daySections = useMemo(
+    () => groupEventsByDay(itinerary, tripRange),
+    [itinerary, tripRange],
+  );
 
-      {/* Edit icon button */}
-      <TouchableOpacity
-        style={{ padding: 15 }}
-        onPress={() => openEditModal(item)}
-      >
-        <Ionicons name="pencil-outline" size={20} color="#2f6deb" />
-      </TouchableOpacity>
-      {/* Delete icon button on the right side of the card */}
-      <TouchableOpacity
-        style={styles.deleteIconButton}
-        onPress={() => handleDeleteEvent(item.id)}
-      >
-        <Ionicons name="trash-outline" size={20} color="#ff4d4d" />
-      </TouchableOpacity>
+  const renderDayHeader = ({ section }: { section: DaySection }) => (
+    <View style={styles.dayHeader}>
+      <Text style={styles.dayNumber}>DAY {section.dayNumber}</Text>
+      <Text style={styles.dayDot}>·</Text>
+      <Text style={styles.dayDate}>{section.title}</Text>
+      {/* Omitted at zero — the placeholder below already says as much. */}
+      {section.data.length > 0 && (
+        <Text style={styles.dayCount}>
+          {section.data.length} {section.data.length === 1 ? "event" : "events"}
+        </Text>
+      )}
     </View>
   );
+
+  /**
+   * An empty day is the fastest way to add something to that day, so the
+   * placeholder is the tap target rather than a dead message. It is drawn as
+   * a dashed outline, not a filled card, so a mostly-empty trip does not read
+   * as a wall of content.
+   */
+  const renderEmptyDay = ({ section }: { section: DaySection }) =>
+    section.data.length > 0 ? null : (
+      <TouchableOpacity
+        style={styles.emptyDay}
+        // Inert while selecting — there is nothing here to select, and
+        // opening the form mid-selection would be a surprise.
+        disabled={isSelecting}
+        onPress={() => openAddModalForDate(section.date)}
+        accessibilityRole="button"
+        accessibilityLabel={`Nothing planned on ${section.title}. Tap to add an event.`}
+      >
+        <Ionicons
+          name="sparkles-outline"
+          size={18}
+          color={colors.textDisabled}
+        />
+        <View style={styles.emptyDayText}>
+          <Text style={styles.emptyDayTitle}>Nothing planned yet</Text>
+          <Text style={styles.emptyDayHint}>Tap to add something to this day</Text>
+        </View>
+      </TouchableOpacity>
+    );
+
+  const renderEventCard = ({ item }: { item: any }) => {
+    const isSelected = selectedIds.has(item.id);
+
+    return (
+      <TouchableOpacity
+        style={[styles.eventCard, isSelected && styles.eventCardSelected]}
+        // Outside selection mode the card itself is inert; the pencil and the
+        // trash are the only targets, exactly as before.
+        activeOpacity={isSelecting ? 0.7 : 1}
+        onPress={() => isSelecting && toggleSelected(item.id)}
+        onLongPress={() => enterSelection(item.id)}
+        delayLongPress={300}
+        accessibilityRole={isSelecting ? "checkbox" : undefined}
+        accessibilityState={isSelecting ? { checked: isSelected } : undefined}
+      >
+        <View style={styles.eventTimeBlock}>
+          <Text style={styles.eventTime}>{item.time}</Text>
+        </View>
+        <View style={styles.eventDivider} />
+        <View style={styles.eventInfo}>
+          <Text style={styles.eventActivity}>{item.place}</Text>
+          <Text style={styles.eventPlace}>{item.address}</Text>
+        </View>
+
+        {isSelecting ? (
+          /* Tapping the card is what toggles selection, so this is an
+             indicator rather than its own button. */
+          <View style={styles.selectIcon}>
+            <Ionicons
+              name={isSelected ? "checkmark-circle" : "ellipse-outline"}
+              size={24}
+              color={isSelected ? colors.primary : colors.textDisabled}
+            />
+          </View>
+        ) : (
+          <>
+            {/* Edit icon button */}
+            <TouchableOpacity
+              style={{ padding: 15 }}
+              onPress={() => openEditModal(item)}
+            >
+              <Ionicons name="pencil-outline" size={20} color={colors.primary} />
+            </TouchableOpacity>
+            {/* Delete icon button on the right side of the card */}
+            <TouchableOpacity
+              style={styles.deleteIconButton}
+              onPress={() => handleDeleteEvent(item.id)}
+            >
+              <Ionicons name="trash-outline" size={20} color={colors.danger} />
+            </TouchableOpacity>
+          </>
+        )}
+      </TouchableOpacity>
+    );
+  };
+  /**
+   * Opens a blank form already pointed at one day — what an empty day's
+   * placeholder does, so adding to day 4 is a single tap.
+   */
+  const openAddModalForDate = (day: Date) => {
+    resetEventForm();
+    setNewDate(day);
+    setIsModalVisible(true);
+  };
+
   const openEditModal = (event: any) => {
     // Populate all the fields with existing data
     setEditingEventId(event.id);
     setNewActivity(event.place);
     setNewTime(event.time);
+    setNewDate(event.date ? parseDate(event.date) : null);
     setNewPlace(event.address);
     setNewLat(event.lat);
     setNewLng(event.lng);
     setNewNotes(event.notes || "");
+    // Start clean so errors from a previous edit do not carry over.
+    setFieldErrors({});
 
     // First, trigger the modal to open
     setIsModalVisible(true);
@@ -350,40 +611,107 @@ export default function TripDetailsScreen() {
                 { paddingHorizontal: 20, paddingTop: 15 },
               ]}
             >
-              <Text style={styles.sectionTitle}>Daily Plan</Text>
+              {isSelecting ? (
+                /* Selection turns the header into its own toolbar, so there
+                   is exactly one thing to do while events are ticked. */
+                <>
+                  <TouchableOpacity
+                    onPress={exitSelection}
+                    disabled={isBulkDeleting}
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.selectionAction}>Cancel</Text>
+                  </TouchableOpacity>
 
-              <View style={{ flexDirection: "row", gap: 10 }}>
-                <TouchableOpacity
-                  style={styles.iconButton}
-                  onPress={() => setIsMapView(!isMapView)}
-                >
-                  <Ionicons
-                    name={isMapView ? "list" : "map"}
-                    size={20}
-                    color="#2f6deb"
-                  />
-                </TouchableOpacity>
+                  <Text style={styles.selectionCount}>
+                    {selectedIds.size} selected
+                  </Text>
 
-                <TouchableOpacity
-                  style={styles.addButton}
-                  onPress={() => setIsModalVisible(true)}
-                >
-                  <Ionicons name="add" size={20} color="#fff" />
-                  <Text style={styles.addButtonText}>Add Event</Text>
-                </TouchableOpacity>
-              </View>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
+                    <TouchableOpacity
+                      onPress={toggleSelectAll}
+                      disabled={isBulkDeleting || itinerary.length === 0}
+                      accessibilityRole="button"
+                    >
+                      <Text style={styles.selectionAction}>
+                        {allSelected ? "Clear" : "Select all"}
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.iconButton}
+                      onPress={handleDeleteSelected}
+                      disabled={isBulkDeleting || selectedIds.size === 0}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Delete ${selectedIds.size} selected events`}
+                    >
+                      {isBulkDeleting ? (
+                        <ActivityIndicator size="small" color={colors.danger} />
+                      ) : (
+                        <Ionicons
+                          name="trash-outline"
+                          size={20}
+                          color={
+                            selectedIds.size === 0
+                              ? colors.textDisabled
+                              : colors.danger
+                          }
+                        />
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.sectionTitle}>Daily Plan</Text>
+
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                    {/* Only offered when there is something to select. */}
+                    {itinerary.length > 0 && !isMapView && (
+                      <TouchableOpacity
+                        onPress={() => setIsSelecting(true)}
+                        accessibilityRole="button"
+                        accessibilityLabel="Select events to delete"
+                      >
+                        <Text style={styles.selectionAction}>Select</Text>
+                      </TouchableOpacity>
+                    )}
+
+                    <TouchableOpacity
+                      style={styles.iconButton}
+                      onPress={() => setIsMapView(!isMapView)}
+                    >
+                      <Ionicons
+                        name={isMapView ? "list" : "map"}
+                        size={20}
+                        color={colors.primary}
+                      />
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.addButton}
+                      onPress={() => setIsModalVisible(true)}
+                    >
+                      <Ionicons name="add" size={20} color={colors.primaryContrast} />
+                      <Text style={styles.addButtonText}>Add Event</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
             </View>
 
             {loading ? (
               <ActivityIndicator
                 size="large"
-                color="#2f6deb"
+                color={colors.primary}
                 style={{ marginTop: 50 }}
               />
             ) : isMapView ? (
               <View style={styles.mapContainer}>
                 <MapView
                   style={styles.map}
+                  // Google Maps does not follow the app theme by itself.
+                  customMapStyle={isDark ? DARK_MAP_STYLE : []}
                   // Clear selection when tapping anywhere else on the map
                   onPress={() => setSelectedEvent(null)}
                   initialRegion={{
@@ -445,26 +773,34 @@ export default function TripDetailsScreen() {
                         )
                       }
                     >
-                      <Ionicons name="navigate" size={18} color="#fff" />
+                      <Ionicons name="navigate" size={18} color={colors.primaryContrast} />
                       <Text style={styles.navigateButtonText}>Navigate</Text>
                     </TouchableOpacity>
                   </View>
                 )}
               </View>
             ) : (
-              <FlatList
-                data={itinerary}
+              <SectionList
+                sections={daySections}
                 renderItem={renderEventCard}
+                renderSectionHeader={renderDayHeader}
+                renderSectionFooter={renderEmptyDay}
                 keyExtractor={(item) => item.id}
                 contentContainerStyle={styles.listPadding}
-                ListEmptyComponent={
-                  <View style={styles.emptyState}>
-                    <Ionicons name="calendar-outline" size={48} color="#ccc" />
-                    <Text style={styles.emptyText}>No events yet.</Text>
-                    <Text style={styles.emptySubText}>
-                      Tap "Add Event" to plan your day.
-                    </Text>
-                  </View>
+                // Keeps the day you are scrolling through named at all times.
+                stickySectionHeadersEnabled
+                // Every trip day is a section, so the list is only truly empty
+                // when the trip has no dates to build sections from.
+                ListHeaderComponent={
+                  itinerary.length === 0 ? (
+                    <View style={styles.emptyState}>
+                      <Ionicons name="calendar-outline" size={48} color={colors.textDisabled} />
+                      <Text style={styles.emptyText}>No events yet.</Text>
+                      <Text style={styles.emptySubText}>
+                        Tap a day below, or “Add Event”, to start planning.
+                      </Text>
+                    </View>
+                  ) : null
                 }
               />
             )}
@@ -496,6 +832,9 @@ export default function TripDetailsScreen() {
                       <GooglePlacesAutocomplete
                         ref={googlePlacesRef}
                         placeholder="e.g. Piazza del Colosseo"
+                        textInputProps={{
+                          placeholderTextColor: colors.textDisabled,
+                        }}
                         // Keep the list open even when user taps outside to dismiss keyboard
                         keepResultsAfterBlur={true}
                         // Fetch full details including geometry for the coordinates
@@ -511,6 +850,7 @@ export default function TripDetailsScreen() {
                           ) {
                             setNewLat(details.geometry.location.lat);
                             setNewLng(details.geometry.location.lng);
+                            clearFieldError("place");
                           }
                           // Dismiss keyboard after selection
                           Keyboard.dismiss();
@@ -537,51 +877,90 @@ export default function TripDetailsScreen() {
                             top: 50,
                             zIndex: 1000,
                             elevation: 10,
-                            backgroundColor: "#fff",
+                            backgroundColor: colors.surface,
                             borderRadius: 10,
                             shadowColor: "#000",
                             shadowOpacity: 0.1,
                             shadowRadius: 4,
                             shadowOffset: { width: 0, height: 2 },
                           },
+                          row: { backgroundColor: colors.surface },
+                          description: { color: colors.textPrimary },
+                          separator: { backgroundColor: colors.border },
                         }}
                         enablePoweredByContainer={false}
                       />
                     </View>
+                    {fieldErrors.place && (
+                      <Text style={styles.fieldErrorText}>
+                        {fieldErrors.place}
+                      </Text>
+                    )}
 
                     {/* 2. Activity Input */}
                     <Text style={styles.inputLabel}>Activity</Text>
                     <TextInput
-                      style={styles.input}
+                      style={[
+                        styles.input,
+                        fieldErrors.activity && styles.inputError,
+                      ]}
                       placeholder="e.g. Visit the Colosseum"
+                      placeholderTextColor={colors.textDisabled}
                       value={newActivity}
-                      onChangeText={setNewActivity}
+                      onChangeText={(text) => {
+                        setNewActivity(text);
+                        clearFieldError("activity");
+                      }}
+                      maxLength={LIMITS.activity.max}
                     />
+                    {fieldErrors.activity && (
+                      <Text style={styles.fieldErrorText}>
+                        {fieldErrors.activity}
+                      </Text>
+                    )}
 
-                    {/* 3. Time Input */}
-                    <Text style={styles.inputLabel}>Time</Text>
+                    {/* 3. When — one field holding both the day and the time */}
+                    <Text style={styles.inputLabel}>When</Text>
 
-                    {/* Button that looks like an input to trigger the time picker */}
+                    {/* Button that looks like an input to trigger the picker */}
                     <TouchableOpacity
-                      style={[styles.input, { justifyContent: "center" }]}
-                      onPress={() => setTimePickerVisible(true)}
+                      style={[
+                        styles.input,
+                        { justifyContent: "center" },
+                        fieldErrors.when && styles.inputError,
+                      ]}
+                      onPress={() => setWhenPickerVisible(true)}
+                      accessibilityRole="button"
+                      accessibilityLabel="Choose the day and time for this activity"
                     >
                       <Text
-                        style={{
-                          color: newTime ? "#1a1a1a" : "#aaa",
-                          fontSize: 15,
-                        }}
+                        style={
+                          newDate && newTime
+                            ? styles.timeValue
+                            : styles.timePlaceholder
+                        }
                       >
-                        {newTime ? newTime : "Select time"}
+                        {newDate && newTime
+                          ? `${formatDate(newDate)} · ${newTime}`
+                          : "Select date and time"}
                       </Text>
                     </TouchableOpacity>
+                    {fieldErrors.when && (
+                      <Text style={styles.fieldErrorText}>
+                        {fieldErrors.when}
+                      </Text>
+                    )}
 
-                    {/* The native modal time picker component */}
-                    <DateTimePickerModal
-                      isVisible={isTimePickerVisible}
-                      mode="time"
-                      onConfirm={handleConfirmTime}
-                      onCancel={() => setTimePickerVisible(false)}
+                    {/* Trip calendar, then the scroll wheel. Both values land
+                        together, so the field is never half set. */}
+                    <TripDayTimePicker
+                      visible={isWhenPickerVisible}
+                      tripStart={tripRange?.start ?? null}
+                      tripEnd={tripRange?.end ?? null}
+                      initialDate={newDate}
+                      initialTime={newTime}
+                      onConfirm={handleConfirmWhen}
+                      onCancel={() => setWhenPickerVisible(false)}
                     />
 
                     <Text style={styles.inputLabel}>Notes</Text>
@@ -589,40 +968,52 @@ export default function TripDetailsScreen() {
                       style={[
                         styles.input,
                         { height: 80, textAlignVertical: "top" },
+                        fieldErrors.notes && styles.inputError,
                       ]}
                       placeholder="Special instructions or tips..."
+                      placeholderTextColor={colors.textDisabled}
                       value={newNotes}
-                      onChangeText={setNewNotes}
+                      onChangeText={(text) => {
+                        setNewNotes(text);
+                        clearFieldError("notes");
+                      }}
                       multiline={true}
+                      maxLength={LIMITS.notes.max}
                     />
+                    {fieldErrors.notes && (
+                      <Text style={styles.fieldErrorText}>
+                        {fieldErrors.notes}
+                      </Text>
+                    )}
 
                     <View style={styles.modalButtons}>
                       <TouchableOpacity
                         style={[styles.modalButton, styles.cancelButton]}
                         onPress={() => {
                           setIsModalVisible(false);
-                          setEditingEventId(null);
-                          setNewActivity("");
-                          setNewTime("");
-                          setNewPlace("");
-                          setNewLat(null);
-                          setNewLng(null);
-                          setNewNotes("");
-
-                          // Clear the text from the Google Places input
-                          googlePlacesRef.current?.setAddressText("");
+                          resetEventForm();
                         }}
+                        disabled={isSubmitting}
                       >
                         <Text style={styles.cancelButtonText}>Cancel</Text>
                       </TouchableOpacity>
 
                       <TouchableOpacity
-                        style={[styles.modalButton, styles.saveButton]}
+                        style={[
+                          styles.modalButton,
+                          styles.saveButton,
+                          isSubmitting && styles.buttonDisabled,
+                        ]}
                         onPress={handleAddEvent}
+                        disabled={isSubmitting}
                       >
-                        <Text style={styles.saveButtonText}>
-                          {editingEventId ? "Save Changes" : "Create"}
-                        </Text>
+                        {isSubmitting ? (
+                          <ActivityIndicator size="small" color={colors.primaryContrast} />
+                        ) : (
+                          <Text style={styles.saveButtonText}>
+                            {editingEventId ? "Save Changes" : "Create"}
+                          </Text>
+                        )}
                       </TouchableOpacity>
                     </View>
                   </View>
@@ -630,13 +1021,16 @@ export default function TripDetailsScreen() {
               </TouchableOpacity>
             </Modal>
 
-            {/* Chat FAB */}
-            <TouchableOpacity
-              style={styles.fab}
-              onPress={() => setViewMode("chat")}
-            >
-              <Ionicons name="chatbubble-ellipses" size={30} color="#fff" />
-            </TouchableOpacity>
+            {/* Chat FAB — hidden while selecting, so the only actions on
+                screen are the ones that apply to the ticked events. */}
+            {!isSelecting && (
+              <TouchableOpacity
+                style={styles.fab}
+                onPress={() => setViewMode("chat")}
+              >
+                <Ionicons name="chatbubble-ellipses" size={30} color={colors.primaryContrast} />
+              </TouchableOpacity>
+            )}
           </View>
         ) : (
           <View style={{ flex: 1 }}>
@@ -668,16 +1062,42 @@ export default function TripDetailsScreen() {
               )}
               keyExtractor={(item) => item.id}
               contentContainerStyle={styles.chatList}
+              // "Typing" bubble sits at the end of the thread while we wait.
+              ListFooterComponent={
+                isAiTyping ? (
+                  <View
+                    style={[
+                      styles.messageBubble,
+                      styles.aiBubble,
+                      styles.typingBubble,
+                    ]}
+                  >
+                    <ActivityIndicator size="small" color={colors.primary} />
+                    <Text style={styles.typingText}>Traveleria AI is typing…</Text>
+                  </View>
+                ) : null
+              }
             />
 
             <View style={styles.inputContainer}>
               <TextInput
                 style={styles.chatInput}
                 placeholder="Ask the AI assistant..."
+                placeholderTextColor={colors.textDisabled}
                 value={inputText}
                 onChangeText={setInputText}
+                editable={!isAiTyping}
+                onSubmitEditing={sendMessage}
+                returnKeyType="send"
               />
-              <TouchableOpacity style={styles.sendButton} onPress={sendMessage}>
+              <TouchableOpacity
+                style={[
+                  styles.sendButton,
+                  (isAiTyping || !inputText.trim()) && styles.buttonDisabled,
+                ]}
+                onPress={sendMessage}
+                disabled={isAiTyping || !inputText.trim()}
+              >
                 <Text style={styles.sendButtonText}>Send</Text>
               </TouchableOpacity>
             </View>
@@ -688,292 +1108,434 @@ export default function TripDetailsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: "#2f6deb" },
-  container: { flex: 1, backgroundColor: "#f4f6f8" },
-  header: { padding: 20, backgroundColor: "#2f6deb", paddingBottom: 20 },
-  locationTag: {
-    color: "#fff",
-    fontSize: 12,
-    fontWeight: "bold",
-    opacity: 0.8,
-  },
-  title: { color: "#fff", fontSize: 24, fontWeight: "bold", marginTop: 5 },
+const makeStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    safeArea: { flex: 1, backgroundColor: colors.primary },
+    container: { flex: 1, backgroundColor: colors.background },
+    header: {
+      padding: Spacing.xl,
+      backgroundColor: colors.primary,
+      paddingBottom: Spacing.xl,
+    },
+    locationTag: {
+      color: colors.primaryContrast,
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.bold,
+      opacity: 0.85,
+      letterSpacing: 0.4,
+    },
+    title: {
+      color: colors.primaryContrast,
+      fontSize: FontSize.h2,
+      fontFamily: FontFamily.bold,
+      marginTop: Spacing.xs + 1,
+    },
 
-  // Section header
-  listPadding: { padding: 20, paddingBottom: 100 },
-  sectionHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 16,
-  },
-  sectionTitle: { fontSize: 20, fontWeight: "bold", color: "#333" },
-  addButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#2f6deb",
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-    gap: 4,
-  },
-  addButtonText: { color: "#fff", fontWeight: "bold", fontSize: 14 },
+    listPadding: { padding: Spacing.xl, paddingBottom: 100 },
+    sectionHeader: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: Spacing.lg,
+    },
+    sectionTitle: {
+      fontSize: FontSize.h3,
+      fontFamily: FontFamily.semibold,
+      color: colors.textPrimary,
+    },
+    addButton: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: colors.primary,
+      paddingHorizontal: Spacing.lg,
+      paddingVertical: Spacing.sm,
+      borderRadius: Radius.xl,
+      gap: Spacing.xs,
+    },
+    addButtonText: {
+      color: colors.primaryContrast,
+      fontFamily: FontFamily.semibold,
+      fontSize: FontSize.small,
+    },
 
-  // Event cards
-  eventCard: {
-    flexDirection: "row",
-    backgroundColor: "#fff",
-    borderRadius: 14,
-    marginBottom: 12,
-    alignItems: "center",
-    elevation: 3,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    overflow: "hidden",
-  },
-  eventTimeBlock: {
-    backgroundColor: "#eef2ff",
-    paddingHorizontal: 14,
-    paddingVertical: 20,
-    alignItems: "center",
-    justifyContent: "center",
-    minWidth: 70,
-  },
-  eventTime: { fontSize: 15, fontWeight: "bold", color: "#2f6deb" },
-  eventDivider: { width: 1, height: "100%", backgroundColor: "#e8e8e8" },
-  eventInfo: { flex: 1, paddingHorizontal: 16, paddingVertical: 14 },
-  eventActivity: { fontSize: 16, fontWeight: "bold", color: "#1a1a1a" },
-  eventPlace: { fontSize: 13, color: "#888", marginTop: 3 },
+    // Day separator. Sticky, so it needs an opaque background of its own —
+    // a transparent header would let event cards scroll through it.
+    dayHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: Spacing.xs + 2,
+      backgroundColor: colors.background,
+      paddingTop: Spacing.md,
+      paddingBottom: Spacing.sm,
+    },
+    dayNumber: {
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.bold,
+      color: colors.primary,
+      letterSpacing: 0.8,
+    },
+    dayDot: {
+      fontSize: FontSize.caption,
+      color: colors.textDisabled,
+    },
+    dayDate: {
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.semibold,
+      color: colors.textSecondary,
+    },
+    dayCount: {
+      marginLeft: "auto",
+      fontSize: FontSize.tiny,
+      fontFamily: FontFamily.regular,
+      color: colors.textMuted,
+    },
 
-  // Empty state
-  emptyState: { alignItems: "center", marginTop: 60 },
-  emptyText: { fontSize: 17, fontWeight: "bold", color: "#aaa", marginTop: 12 },
-  emptySubText: { fontSize: 14, color: "#bbb", marginTop: 4 },
+    // A slot waiting to be filled, not a card. Dashed and transparent so it
+    // recedes behind the real events on a mostly-empty trip.
+    emptyDay: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: Spacing.md,
+      borderWidth: 1,
+      borderStyle: "dashed",
+      borderColor: colors.border,
+      borderRadius: Radius.lg,
+      paddingVertical: Spacing.lg,
+      paddingHorizontal: Spacing.lg,
+      marginBottom: Spacing.md,
+    },
+    emptyDayText: { flex: 1 },
+    emptyDayTitle: {
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.medium,
+      color: colors.textSecondary,
+    },
+    emptyDayHint: {
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.regular,
+      color: colors.textMuted,
+      marginTop: 2,
+    },
 
-  // Modal
-  modalOverlay: {
-    flex: 1,
-    // Align the modal content to the top
-    justifyContent: "flex-start",
-    // Add space to clear the status bar and notch
-    paddingTop: 60,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    paddingHorizontal: 20,
-  },
-  modalContent: {
-    backgroundColor: "#fff",
-    borderRadius: 20,
-    padding: 25,
-    elevation: 5,
-    // Ensure the modal content allows the dropdown to float above
-    zIndex: 1,
-  },
-  modalTitle: {
-    fontSize: 22,
-    fontWeight: "bold",
-    marginBottom: 20,
-    textAlign: "center",
-    color: "#1a1a1a",
-  },
-  inputLabel: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#555",
-    marginBottom: 5,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: "#e0e0e0",
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 14,
-    fontSize: 15,
-    backgroundColor: "#fafafa",
-  },
-  modalButtons: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 4,
-  },
-  modalButton: {
-    flex: 1,
-    padding: 15,
-    borderRadius: 10,
-    alignItems: "center",
-    marginHorizontal: 5,
-  },
-  cancelButton: { backgroundColor: "#eee" },
-  saveButton: { backgroundColor: "#2f6deb" },
-  cancelButtonText: { color: "#666", fontWeight: "bold" },
-  saveButtonText: { color: "#fff", fontWeight: "bold" },
+    selectionCount: {
+      fontSize: FontSize.body,
+      fontFamily: FontFamily.semibold,
+      color: colors.textPrimary,
+    },
+    selectionAction: {
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.semibold,
+      color: colors.primary,
+    },
+    selectIcon: { paddingHorizontal: Spacing.lg },
 
-  // FAB
-  fab: {
-    position: "absolute",
-    right: 20,
-    bottom: 30,
-    backgroundColor: "#2f6deb",
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    justifyContent: "center",
-    alignItems: "center",
-    elevation: 5,
-    shadowColor: "#000",
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
-    shadowOffset: { width: 0, height: 2 },
-  },
+    eventCard: {
+      flexDirection: "row",
+      backgroundColor: colors.surface,
+      borderRadius: Radius.lg,
+      marginBottom: Spacing.md,
+      alignItems: "center",
+      ...Elevation.sm,
+      overflow: "hidden",
+    },
+    eventCardSelected: {
+      borderWidth: 2,
+      borderColor: colors.primary,
+      backgroundColor: colors.primarySoft,
+    },
+    eventTimeBlock: {
+      backgroundColor: colors.primarySoft,
+      paddingHorizontal: Spacing.lg,
+      paddingVertical: Spacing.xl,
+      alignItems: "center",
+      justifyContent: "center",
+      minWidth: 70,
+    },
+    eventTime: {
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.bold,
+      color: colors.primary,
+    },
+    eventDivider: { width: 1, height: "100%", backgroundColor: colors.border },
+    eventInfo: {
+      flex: 1,
+      paddingHorizontal: Spacing.lg,
+      paddingVertical: Spacing.lg,
+    },
+    eventActivity: {
+      fontSize: FontSize.body,
+      fontFamily: FontFamily.semibold,
+      color: colors.textPrimary,
+    },
+    eventPlace: {
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.regular,
+      color: colors.textMuted,
+      marginTop: 3,
+    },
 
-  // Chat
-  backButton: {
-    padding: 12,
-    backgroundColor: "#fff",
-    borderBottomWidth: 1,
-    borderBottomColor: "#eee",
-  },
-  backText: { color: "#2f6deb", fontWeight: "bold", fontSize: 14 },
-  chatList: { padding: 20 },
-  messageBubble: {
-    padding: 12,
-    borderRadius: 18,
-    marginBottom: 10,
-    maxWidth: "80%",
-  },
-  userBubble: {
-    alignSelf: "flex-end",
-    backgroundColor: "#2f6deb",
-    borderBottomRightRadius: 2,
-  },
-  aiBubble: {
-    alignSelf: "flex-start",
-    backgroundColor: "#fff",
-    borderBottomLeftRadius: 2,
-    elevation: 2,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-  },
-  messageText: { fontSize: 16 },
-  userText: { color: "#fff" },
-  aiText: { color: "#333" },
-  inputContainer: {
-    flexDirection: "row",
-    paddingHorizontal: 15,
-    paddingTop: 10,
-    paddingBottom: Platform.OS === "ios" ? 35 : 15,
-    backgroundColor: "#fff",
-    borderTopWidth: 1,
-    borderTopColor: "#eee",
-    alignItems: "center",
-  },
-  chatInput: {
-    flex: 1,
-    height: 45,
-    backgroundColor: "#f0f2f5",
-    borderRadius: 22,
-    paddingHorizontal: 20,
-    marginRight: 10,
-    fontSize: 16,
-  },
-  deleteIconButton: {
-    padding: 15,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  sendButton: {
-    backgroundColor: "#2f6deb",
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 20,
-  },
-  sendButtonText: { color: "#fff", fontWeight: "bold" },
-  iconButton: {
-    padding: 8,
-    backgroundColor: "#eef2ff",
-    borderRadius: 20,
-    justifyContent: "center",
-    alignItems: "center",
-    width: 40,
-    height: 40,
-  },
-  mapContainer: {
-    flex: 1,
-    marginHorizontal: 20,
-    marginBottom: 100,
-    borderRadius: 20,
-    overflow: "hidden",
-    elevation: 4,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 5,
-  },
-  map: {
-    width: "100%",
-    height: "100%",
-  },
-  infoCard: {
-    position: "absolute",
-    bottom: 20,
-    left: 20,
-    right: 20,
-    backgroundColor: "#fff",
-    borderRadius: 15,
-    padding: 15,
-    elevation: 5,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 5,
-  },
-  infoCardHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 5,
-  },
-  infoCardTitle: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#1a1a1a",
-    flex: 1,
-  },
-  infoCardTime: {
-    fontSize: 14,
-    fontWeight: "bold",
-    color: "#2f6deb",
-    marginLeft: 10,
-  },
-  infoCardAddress: {
-    fontSize: 14,
-    color: "#666",
-  },
-  navigateButton: {
-    backgroundColor: "#2f6deb",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 10,
-    borderRadius: 10,
-    marginTop: 12,
-    gap: 8,
-  },
-  navigateButtonText: {
-    color: "#fff",
-    fontWeight: "bold",
-    fontSize: 14,
-  },
-  infoCardNotes: {
-    fontSize: 13,
-    color: "#444",
-    fontStyle: "italic",
-    marginTop: 8,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: "#f0f0f0",
-  },
-});
+    emptyState: { alignItems: "center", marginTop: 60 },
+    emptyText: {
+      fontSize: FontSize.h3,
+      fontFamily: FontFamily.semibold,
+      color: colors.textMuted,
+      marginTop: Spacing.md,
+    },
+    emptySubText: {
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.regular,
+      color: colors.textDisabled,
+      marginTop: Spacing.xs,
+    },
+
+    modalOverlay: {
+      flex: 1,
+      justifyContent: "flex-start",
+      paddingTop: 60,
+      backgroundColor: colors.overlay,
+      paddingHorizontal: Spacing.xl,
+    },
+    modalContent: {
+      backgroundColor: colors.surface,
+      borderRadius: Radius.xl,
+      padding: Spacing.xxl,
+      ...Elevation.lg,
+      zIndex: 1,
+    },
+    modalTitle: {
+      fontSize: FontSize.h2,
+      fontFamily: FontFamily.bold,
+      marginBottom: Spacing.xl,
+      textAlign: "center",
+      color: colors.textPrimary,
+    },
+    inputLabel: {
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.semibold,
+      color: colors.textSecondary,
+      marginBottom: Spacing.xs + 1,
+    },
+    input: {
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: Radius.md,
+      padding: Spacing.md,
+      marginBottom: Spacing.lg,
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.regular,
+      color: colors.textPrimary,
+      backgroundColor: colors.surfaceSunken,
+    },
+    inputError: { borderColor: colors.danger },
+    fieldErrorText: {
+      color: colors.danger,
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.regular,
+      // Pulls the message up against the field it belongs to.
+      marginTop: -Spacing.md,
+      marginBottom: Spacing.md,
+    },
+    timeValue: {
+      color: colors.textPrimary,
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.regular,
+    },
+    timePlaceholder: {
+      color: colors.textDisabled,
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.regular,
+    },
+    modalButtons: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      marginTop: Spacing.xs,
+    },
+    modalButton: {
+      flex: 1,
+      padding: Spacing.lg,
+      borderRadius: Radius.md,
+      alignItems: "center",
+      marginHorizontal: Spacing.xs + 1,
+    },
+    cancelButton: { backgroundColor: colors.surfaceAlt },
+    saveButton: { backgroundColor: colors.primary },
+    cancelButtonText: {
+      color: colors.textSecondary,
+      fontFamily: FontFamily.semibold,
+    },
+    saveButtonText: {
+      color: colors.primaryContrast,
+      fontFamily: FontFamily.semibold,
+    },
+    buttonDisabled: { opacity: 0.5 },
+
+    fab: {
+      position: "absolute",
+      right: Spacing.xl,
+      bottom: Spacing.xxxl,
+      backgroundColor: colors.primary,
+      width: 60,
+      height: 60,
+      borderRadius: 30,
+      justifyContent: "center",
+      alignItems: "center",
+      ...Elevation.lg,
+    },
+
+    backButton: {
+      padding: Spacing.md,
+      backgroundColor: colors.surface,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    backText: {
+      color: colors.primary,
+      fontFamily: FontFamily.semibold,
+      fontSize: FontSize.small,
+    },
+    chatList: { padding: Spacing.xl },
+    messageBubble: {
+      padding: Spacing.md,
+      borderRadius: 18,
+      marginBottom: Spacing.md,
+      maxWidth: "80%",
+    },
+    userBubble: {
+      alignSelf: "flex-end",
+      backgroundColor: colors.primary,
+      borderBottomRightRadius: 2,
+    },
+    aiBubble: {
+      alignSelf: "flex-start",
+      backgroundColor: colors.surface,
+      borderBottomLeftRadius: 2,
+      ...Elevation.sm,
+    },
+    messageText: { fontSize: FontSize.body, fontFamily: FontFamily.regular },
+    userText: { color: colors.primaryContrast },
+    aiText: { color: colors.textPrimary },
+    typingBubble: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: Spacing.sm,
+    },
+    typingText: {
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.regular,
+      color: colors.textMuted,
+      fontStyle: "italic",
+    },
+    inputContainer: {
+      flexDirection: "row",
+      paddingHorizontal: Spacing.lg,
+      paddingTop: Spacing.md,
+      paddingBottom: Platform.OS === "ios" ? 35 : Spacing.lg,
+      backgroundColor: colors.surface,
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+      alignItems: "center",
+    },
+    chatInput: {
+      flex: 1,
+      height: 45,
+      backgroundColor: colors.surfaceSunken,
+      borderRadius: 22,
+      paddingHorizontal: Spacing.xl,
+      marginRight: Spacing.md,
+      fontSize: FontSize.body,
+      fontFamily: FontFamily.regular,
+      color: colors.textPrimary,
+    },
+    deleteIconButton: {
+      padding: Spacing.lg,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    sendButton: {
+      backgroundColor: colors.primary,
+      paddingVertical: Spacing.md,
+      paddingHorizontal: Spacing.xl,
+      borderRadius: Radius.xl,
+    },
+    sendButtonText: {
+      color: colors.primaryContrast,
+      fontFamily: FontFamily.semibold,
+    },
+    iconButton: {
+      padding: Spacing.sm,
+      backgroundColor: colors.primarySoft,
+      borderRadius: Radius.xl,
+      justifyContent: "center",
+      alignItems: "center",
+      width: 40,
+      height: 40,
+    },
+
+    mapContainer: {
+      flex: 1,
+      marginHorizontal: Spacing.xl,
+      marginBottom: 100,
+      borderRadius: Radius.xl,
+      overflow: "hidden",
+      ...Elevation.md,
+    },
+    map: { width: "100%", height: "100%" },
+    infoCard: {
+      position: "absolute",
+      bottom: Spacing.xl,
+      left: Spacing.xl,
+      right: Spacing.xl,
+      backgroundColor: colors.surface,
+      borderRadius: Radius.lg,
+      padding: Spacing.lg,
+      ...Elevation.lg,
+    },
+    infoCardHeader: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: Spacing.xs + 1,
+    },
+    infoCardTitle: {
+      fontSize: FontSize.h3,
+      fontFamily: FontFamily.semibold,
+      color: colors.textPrimary,
+      flex: 1,
+    },
+    infoCardTime: {
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.bold,
+      color: colors.primary,
+      marginLeft: Spacing.md,
+    },
+    infoCardAddress: {
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.regular,
+      color: colors.textSecondary,
+    },
+    navigateButton: {
+      backgroundColor: colors.primary,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      paddingVertical: Spacing.md,
+      borderRadius: Radius.md,
+      marginTop: Spacing.md,
+      gap: Spacing.sm,
+    },
+    navigateButtonText: {
+      color: colors.primaryContrast,
+      fontFamily: FontFamily.semibold,
+      fontSize: FontSize.small,
+    },
+    infoCardNotes: {
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.regular,
+      color: colors.textSecondary,
+      fontStyle: "italic",
+      marginTop: Spacing.sm,
+      paddingTop: Spacing.sm,
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+    },
+  });

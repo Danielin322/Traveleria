@@ -11,9 +11,10 @@ from shared.database import get_db
 from shared.response import error, success
 from shared.utils import (
     AppError,
+    format_event_date,
     get_or_create_trip_day_for_date,
     parse_body,
-    parse_single_date,
+    parse_event_date,
     parse_uuid,
 )
 
@@ -202,12 +203,7 @@ def _add_itinerary_item(db, trip_id, user_id, trip, args):
     address = args.get("address") or ""
     notes = args.get("notes")
 
-    day = parse_single_date(args["day"], "day")
-    if not (trip["start_date"] <= day <= trip["end_date"]):
-        raise AppError(
-            f"day must be between {trip['start_date'].strftime('%d.%m.%Y')} "
-            f"and {trip['end_date'].strftime('%d.%m.%Y')}"
-        )
+    day = parse_event_date(args["day"])
 
     lat, lng, resolved_address = _lookup_place(place, trip["location"])
     if resolved_address:
@@ -226,7 +222,7 @@ def _add_itinerary_item(db, trip_id, user_id, trip, args):
     )
     row = db.fetchone()
     return {
-        "id": str(row["id"]), "time": row["time"], "place": place,
+        "id": str(row["id"]), "date": format_event_date(day), "time": row["time"], "place": place,
         "address": address, "lat": lat, "lng": lng, "notes": notes,
     }
 
@@ -234,7 +230,7 @@ def _add_itinerary_item(db, trip_id, user_id, trip, args):
 def _remove_itinerary_item(db, trip_id, user_id, args):
     place_query = args["place"]
     day_str = args.get("day")
-    day = parse_single_date(day_str, "day") if day_str else None
+    day = parse_event_date(day_str) if day_str else None
 
     query = """
         SELECT dp.id, dp.place_id, p.name, dp.visit_time, td.day_date
@@ -257,7 +253,7 @@ def _remove_itinerary_item(db, trip_id, user_id, args):
 
     if len(rows) > 1:
         candidates = [
-            {"place": row["name"], "day": row["day_date"].strftime("%d.%m.%Y"), "time": row["visit_time"]}
+            {"place": row["name"], "day": format_event_date(row["day_date"]), "time": row["visit_time"]}
             for row in rows
         ]
         return {"status": "ambiguous", "candidates": candidates}
