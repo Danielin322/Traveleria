@@ -51,7 +51,6 @@ CREATE TABLE IF NOT EXISTS day_places (
 CREATE TABLE IF NOT EXISTS wallet_documents (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    trip_id UUID REFERENCES trips(id) ON DELETE SET NULL,
     document_type TEXT NOT NULL,
     s3_key TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -72,9 +71,6 @@ CREATE INDEX IF NOT EXISTS idx_day_places_place_id
 
 CREATE INDEX IF NOT EXISTS idx_wallet_documents_user_id
     ON wallet_documents(user_id);
-
-CREATE INDEX IF NOT EXISTS idx_wallet_documents_trip_id
-    ON wallet_documents(trip_id);
 
 ALTER TABLE places
     ADD COLUMN IF NOT EXISTS address TEXT;
