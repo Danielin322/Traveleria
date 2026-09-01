@@ -1,5 +1,4 @@
 import { Ionicons } from "@expo/vector-icons";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect, useRouter } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useMemo, useState } from "react";
@@ -33,8 +32,7 @@ import {
 import { ThemeMode, useTheme } from "../../contexts/ThemeContext";
 import { apiFetch } from "../../services/apiClient";
 import { signOutUser } from "../../services/authService";
-
-const PHOTO_KEY = "profile_photo_uri";
+import { uploadAvatar } from "../../services/walletService";
 
 const THEME_OPTIONS = [
   { value: "light", label: "Light" },
@@ -47,7 +45,10 @@ export default function ProfileScreen() {
   const { colors, mode, setMode } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
 
+  // Presigned S3 URL from the profile payload. Never a device path: keeping
+  // the photo locally is what made every account on one device share it.
   const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -81,6 +82,9 @@ export default function ProfileScreen() {
         // Arrives as a JSON array from the TEXT[] column.
         dietary: parseDietary(data.dietary),
       });
+      // Null when this account has no photo — which is exactly what another
+      // account signing in on the same device should see.
+      setPhotoUri(data.avatar_url ?? null);
     } catch (err) {
       // Previously swallowed, which left the screen looking blank but fine.
       setError("Could not load your profile. Pull down or tap retry.");
@@ -98,7 +102,6 @@ export default function ProfileScreen() {
 
   useFocusEffect(useCallback(() => {
     fetchProfile();
-    AsyncStorage.getItem(PHOTO_KEY).then((uri) => { if (uri) setPhotoUri(uri); });
   }, []));
 
   const handleChangePhoto = async () => {
@@ -113,10 +116,23 @@ export default function ProfileScreen() {
       aspect: [1, 1],
       quality: 0.7,
     });
-    if (!result.canceled) {
-      const uri = result.assets[0].uri;
-      setPhotoUri(uri);
-      AsyncStorage.setItem(PHOTO_KEY, uri);
+    if (result.canceled) return;
+
+    const asset = result.assets[0];
+    setIsUploadingPhoto(true);
+    // Show the local file straight away; the upload replaces it with the S3
+    // copy on the next fetch. If the upload fails we put the old one back.
+    const previous = photoUri;
+    setPhotoUri(asset.uri);
+    try {
+      await uploadAvatar(asset.uri, asset.mimeType || "image/jpeg");
+      await fetchProfile();
+    } catch (err) {
+      setPhotoUri(previous);
+      console.error("Error uploading photo:", err);
+      Alert.alert("Could not update photo", (err as Error).message);
+    } finally {
+      setIsUploadingPhoto(false);
     }
   };
 
@@ -204,7 +220,19 @@ export default function ProfileScreen() {
               <Ionicons name="person" size={64} color={colors.textDisabled} />
             </View>
           )}
-          <TouchableOpacity style={styles.cameraBadge} onPress={handleChangePhoto}>
+          {/* The photo now travels to S3, so there is a wait worth showing. */}
+          {isUploadingPhoto && (
+            <View style={[styles.profileImage, styles.uploadingOverlay]}>
+              <ActivityIndicator color={colors.primaryContrast} />
+            </View>
+          )}
+          <TouchableOpacity
+            style={styles.cameraBadge}
+            onPress={handleChangePhoto}
+            disabled={isUploadingPhoto}
+            accessibilityRole="button"
+            accessibilityLabel="Change profile photo"
+          >
             <Ionicons name="camera" size={20} color={colors.primaryContrast} />
           </TouchableOpacity>
         </View>
@@ -395,6 +423,14 @@ const makeStyles = (colors: ThemeColors) =>
       borderRadius: 65,
       borderWidth: 4,
       borderColor: colors.surfaceAlt,
+    },
+    // Sits exactly on top of the avatar, so the spinner reads as "this photo
+    // is being replaced" rather than as a general busy state.
+    uploadingOverlay: {
+      position: "absolute",
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: "rgba(0,0,0,0.45)",
     },
     avatarPlaceholder: {
       backgroundColor: colors.surfaceSunken,

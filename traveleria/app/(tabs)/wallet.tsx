@@ -1,13 +1,15 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
-import React, { useEffect, useMemo, useState } from "react";
+import { useFocusEffect } from "expo-router";
+import React, { useCallback, useMemo, useState } from "react";
 import {
+    ActivityIndicator,
     Alert,
     Animated,
     FlatList,
     Image,
     Modal,
+    RefreshControl,
     StyleSheet,
     Text,
     TextInput,
@@ -25,6 +27,13 @@ import {
     ThemeColors,
 } from "../../constants/theme";
 import { useThemeColors } from "../../contexts/ThemeContext";
+import {
+    WalletDocument,
+    createDocument,
+    deleteDocument,
+    listDocuments,
+    updateDocument,
+} from "../../services/walletService";
 
 // Apple Wallet style colors
 const APPLE_COLORS = [
@@ -36,23 +45,41 @@ const APPLE_COLORS = [
   "#5856D6",
 ];
 
-const STORAGE_KEY = "wallet_documents";
-
 export default function WalletScreen() {
   const colors = useThemeColors();
   const styles = useMemo(() => makeStyles(colors), [colors]);
 
-  const [documents, setDocuments] = useState<any[]>([]);
+  const [documents, setDocuments] = useState<WalletDocument[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
-  useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY).then((raw) => {
-      if (raw) setDocuments(JSON.parse(raw));
-    });
+  const loadDocuments = useCallback(async () => {
+    try {
+      setError(null);
+      setDocuments(await listDocuments());
+    } catch (err) {
+      setError((err as Error).message);
+      console.error("Error loading wallet:", err);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  const saveDocuments = (docs: any[]) => {
-    setDocuments(docs);
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(docs));
+  // Viewing URLs are presigned and expire, so the list is refetched whenever
+  // the tab regains focus rather than being held from the last visit. This
+  // also means signing in as another account never shows stale documents.
+  useFocusEffect(
+    useCallback(() => {
+      loadDocuments();
+    }, [loadDocuments]),
+  );
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await loadDocuments();
+    setRefreshing(false);
   };
 
   // State for Add Document Modal
@@ -71,23 +98,36 @@ export default function WalletScreen() {
 
   // Create Document Function
   const handleCreate = async () => {
+    if (isSaving) return;
     if (!newDocTitle.trim()) {
       Alert.alert("Name required", "Please enter a document name.");
       return;
     }
-    let result = await DocumentPicker.getDocumentAsync({ type: "*/*" });
-    if (!result.canceled) {
-      const newDoc = {
-        id: Math.random().toString(),
-        title: newDocTitle,
+
+    const result = await DocumentPicker.getDocumentAsync({ type: "*/*" });
+    if (result.canceled) return;
+
+    const asset = result.assets[0];
+    setIsSaving(true);
+    try {
+      await createDocument({
+        title: newDocTitle.trim(),
         color: newDocColor,
-        uri: result.assets[0].uri,
-        mimeType: result.assets[0].mimeType,
-      };
-      saveDocuments([newDoc, ...documents]);
+        uri: asset.uri,
+        fileName: asset.name,
+        mimeType: asset.mimeType || "application/octet-stream",
+        size: asset.size,
+      });
+      // The list comes back from the server rather than being patched
+      // locally, so the card always carries a fresh presigned URL.
+      await loadDocuments();
       setAddModalVisible(false);
       setNewDocTitle("");
       setNewDocColor(APPLE_COLORS[0]);
+    } catch (err) {
+      Alert.alert("Could not add document", (err as Error).message);
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -99,20 +139,35 @@ export default function WalletScreen() {
     setEditModalVisible(true);
   };
 
-  const handleSaveEdit = () => {
+  const handleSaveEdit = async () => {
+    if (isSaving) return;
     if (!editDocTitle.trim()) {
       Alert.alert("Name required", "Please enter a document name.");
       return;
     }
-    saveDocuments(
-      documents.map((doc) =>
-        doc.id === editingDoc.id
-          ? { ...doc, title: editDocTitle, color: editDocColor }
-          : doc,
-      ),
-    );
-    setEditModalVisible(false);
-    setEditingDoc(null);
+
+    setIsSaving(true);
+    try {
+      await updateDocument(editingDoc.id, {
+        title: editDocTitle.trim(),
+        color: editDocColor,
+      });
+      // Renaming touches no S3 object, so the existing URLs stay valid and
+      // the list can be patched in place.
+      setDocuments((prev) =>
+        prev.map((doc) =>
+          doc.id === editingDoc.id
+            ? { ...doc, title: editDocTitle.trim(), color: editDocColor }
+            : doc,
+        ),
+      );
+      setEditModalVisible(false);
+      setEditingDoc(null);
+    } catch (err) {
+      Alert.alert("Could not save changes", (err as Error).message);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // Deleting a document cannot be undone, so confirm first — matching the
@@ -126,10 +181,17 @@ export default function WalletScreen() {
         {
           text: "Delete",
           style: "destructive",
-          onPress: () => {
-            saveDocuments(documents.filter((doc) => doc.id !== editingDoc.id));
-            setEditModalVisible(false);
-            setEditingDoc(null);
+          onPress: async () => {
+            const target = editingDoc;
+            try {
+              await deleteDocument(target.id);
+              setDocuments((prev) => prev.filter((doc) => doc.id !== target.id));
+              setEditModalVisible(false);
+              setEditingDoc(null);
+            } catch (err) {
+              // Leave the sheet open so the retry is one tap away.
+              Alert.alert("Could not delete", (err as Error).message);
+            }
           },
         },
       ],
@@ -172,22 +234,56 @@ export default function WalletScreen() {
         </TouchableOpacity>
       </View>
 
-      <FlatList
-        data={documents}
-        renderItem={renderItem}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.listContent}
-        showsVerticalScrollIndicator={false}
-        ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Ionicons name="card-outline" size={52} color={colors.textDisabled} />
-            <Text style={styles.emptyText}>No documents yet</Text>
-            <Text style={styles.emptySubText}>
-              Tap + to add a boarding pass, ticket or booking.
-            </Text>
-          </View>
-        }
-      />
+      {loading ? (
+        <ActivityIndicator
+          size="large"
+          color={colors.primary}
+          style={{ marginTop: 60 }}
+        />
+      ) : (
+        <FlatList
+          data={documents}
+          renderItem={renderItem}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              tintColor={colors.primary}
+            />
+          }
+          ListEmptyComponent={
+            error ? (
+              <View style={styles.emptyState}>
+                <Ionicons
+                  name="cloud-offline-outline"
+                  size={52}
+                  color={colors.textDisabled}
+                />
+                <Text style={styles.emptyText}>Could not load your wallet</Text>
+                <Text style={styles.emptySubText}>{error}</Text>
+                <TouchableOpacity
+                  onPress={handleRefresh}
+                  style={styles.retryButton}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.retryText}>Try again</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.emptyState}>
+                <Ionicons name="card-outline" size={52} color={colors.textDisabled} />
+                <Text style={styles.emptyText}>No documents yet</Text>
+                <Text style={styles.emptySubText}>
+                  Tap + to add a boarding pass, ticket or booking.
+                </Text>
+              </View>
+            )
+          }
+        />
+      )}
 
       {/* --- Add Document Modal --- */}
       <Modal visible={isAddModalVisible} transparent animationType="slide">
@@ -222,8 +318,16 @@ export default function WalletScreen() {
               >
                 <Text style={styles.cancelBtnText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.createBtn} onPress={handleCreate}>
-                <Text style={styles.createBtnText}>Create</Text>
+              <TouchableOpacity
+                style={[styles.createBtn, isSaving && styles.btnBusy]}
+                onPress={handleCreate}
+                disabled={isSaving}
+              >
+                {isSaving ? (
+                  <ActivityIndicator size="small" color={colors.primaryContrast} />
+                ) : (
+                  <Text style={styles.createBtnText}>Create</Text>
+                )}
               </TouchableOpacity>
             </View>
           </View>
@@ -267,10 +371,15 @@ export default function WalletScreen() {
                 <Text style={styles.cancelBtnText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={styles.createBtn}
+                style={[styles.createBtn, isSaving && styles.btnBusy]}
                 onPress={handleSaveEdit}
+                disabled={isSaving}
               >
-                <Text style={styles.createBtnText}>Save</Text>
+                {isSaving ? (
+                  <ActivityIndicator size="small" color={colors.primaryContrast} />
+                ) : (
+                  <Text style={styles.createBtnText}>Save</Text>
+                )}
               </TouchableOpacity>
             </View>
 
@@ -309,18 +418,17 @@ export default function WalletScreen() {
           <View style={styles.documentContainer}>
             {selectedDoc?.mimeType?.includes("image") ? (
               <Image
-                source={{ uri: selectedDoc.uri }}
+                source={{ uri: selectedDoc.url }}
                 style={styles.fullDocImage}
                 resizeMode="contain"
               />
             ) : (
               <WebView
-                source={{ uri: selectedDoc?.uri }}
+                source={{ uri: selectedDoc?.url }}
                 style={styles.webview}
-                originWhitelist={["*"]}
-                allowFileAccess={true}
-                allowFileAccessFromFileURLs={true}
-                allowUniversalAccessFromFileURLs={true}
+                // No allowFileAccess* any more: documents are fetched over
+                // https from S3, never from the device filesystem.
+                startInLoadingState
               />
             )}
           </View>
@@ -358,6 +466,19 @@ const makeStyles = (colors: ThemeColors) =>
       flexGrow: 1,
     },
     emptyState: { alignItems: "center", marginTop: 60 },
+    retryButton: {
+      marginTop: Spacing.xl,
+      paddingHorizontal: Spacing.xl,
+      paddingVertical: Spacing.md,
+      borderRadius: Radius.md,
+      backgroundColor: colors.surfaceAlt,
+    },
+    retryText: {
+      color: colors.primary,
+      fontFamily: FontFamily.semibold,
+      fontSize: FontSize.small,
+    },
+    btnBusy: { opacity: 0.7 },
     emptyText: {
       fontSize: FontSize.h3,
       fontFamily: FontFamily.semibold,
