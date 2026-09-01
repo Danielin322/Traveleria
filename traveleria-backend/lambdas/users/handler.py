@@ -1,7 +1,25 @@
+import mimetypes
+import os
+
+import boto3
+from botocore.config import Config
+
 from shared.auth import get_current_user
 from shared.database import get_db
 from shared.response import error, success
 from shared.utils import AppError, parse_body
+
+# The profile photo lives in the same bucket as wallet documents, under the
+# same per-user prefix. It was previously kept in device-local AsyncStorage,
+# which is why every account signed in on one device showed the same picture.
+BUCKET = os.getenv("WALLET_BUCKET", "")
+
+AVATAR_VIEW_TTL_SECONDS = 15 * 60
+AVATAR_UPLOAD_TTL_SECONDS = 5 * 60
+
+ALLOWED_AVATAR_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic"}
+
+_s3 = boto3.client("s3", config=Config(signature_version="s3v4"))
 
 # Mirrors traveleria/constants/profileOptions.ts and the CHECK constraints in
 # sql/004_user_preferences.sql. Validating here as well as in the database gives
@@ -126,11 +144,46 @@ def _clean_interests(body):
     return unique
 
 
+def _avatar_view_url(s3_key):
+    """A short-lived URL for reading the photo, or None when none is set."""
+    if not s3_key or not BUCKET:
+        return None
+    return _s3.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": BUCKET, "Key": s3_key},
+        ExpiresIn=AVATAR_VIEW_TTL_SECONDS,
+    )
+
+
+def _avatar_upload(current_user, content_type):
+    """
+    Issues a presigned PUT for a new photo and returns (key, url).
+
+    One key per user, overwritten in place: a profile has exactly one photo,
+    and reusing the key means replacing it cannot leave the previous one
+    orphaned in the bucket.
+    """
+    if content_type not in ALLOWED_AVATAR_TYPES:
+        raise AppError(f"Unsupported image type: {content_type}")
+    if not BUCKET:
+        raise AppError("WALLET_BUCKET is not configured", status=500)
+
+    extension = mimetypes.guess_extension(content_type) or ".jpg"
+    s3_key = f"users/{current_user['id']}/avatar{extension}"
+    url = _s3.generate_presigned_url(
+        "put_object",
+        Params={"Bucket": BUCKET, "Key": s3_key, "ContentType": content_type},
+        ExpiresIn=AVATAR_UPLOAD_TTL_SECONDS,
+    )
+    return s3_key, url
+
+
 def _get_profile(current_user):
     with get_db() as db:
         db.execute(
             """
             SELECT full_name, country, language, age, interests, gender, dietary,
+                   avatar_s3_key,
                    (SELECT COUNT(*) FROM trips WHERE owner_user_id = %s) AS trips_count
             FROM users WHERE id = %s
             """,
@@ -142,6 +195,7 @@ def _get_profile(current_user):
         "country": row["country"], "language": row["language"],
         "age": row["age"], "interests": row["interests"] or [],
         "gender": row["gender"], "dietary": row["dietary"] or [],
+        "avatar_url": _avatar_view_url(row["avatar_s3_key"]),
         "trips_count": row["trips_count"],
     })
 
@@ -151,6 +205,15 @@ def _update_profile(event, current_user):
     gender = _clean_gender(body)
     dietary = _clean_dietary(body)
     interests = _clean_interests(body)
+
+    # Asking for an upload URL rides along on the normal profile save rather
+    # than needing its own route.
+    avatar_key, avatar_upload_url = None, None
+    if body.get("avatar_content_type"):
+        avatar_key, avatar_upload_url = _avatar_upload(
+            current_user, body["avatar_content_type"]
+        )
+
     with get_db() as db:
         db.execute(
             """
@@ -158,12 +221,14 @@ def _update_profile(event, current_user):
             SET full_name=COALESCE(%s, full_name), country=COALESCE(%s, country),
                 language=COALESCE(%s, language), age=COALESCE(%s, age),
                 interests=COALESCE(%s, interests), gender=COALESCE(%s, gender),
-                dietary=COALESCE(%s, dietary), updated_at=NOW()
+                dietary=COALESCE(%s, dietary),
+                avatar_s3_key=COALESCE(%s, avatar_s3_key), updated_at=NOW()
             WHERE id=%s
-            RETURNING full_name, country, language, age, interests, gender, dietary
+            RETURNING full_name, country, language, age, interests, gender, dietary,
+                      avatar_s3_key
             """,
             (body.get("full_name"), body.get("country"), body.get("language"),
-             body.get("age"), interests, gender, dietary,
+             body.get("age"), interests, gender, dietary, avatar_key,
              current_user["id"]),
         )
         row = db.fetchone()
@@ -172,4 +237,8 @@ def _update_profile(event, current_user):
         "language": row["language"], "age": row["age"],
         "interests": row["interests"] or [], "gender": row["gender"],
         "dietary": row["dietary"] or [],
+        "avatar_url": _avatar_view_url(row["avatar_s3_key"]),
+        # Present only when an upload was requested; the app PUTs the image
+        # straight to S3 with this.
+        "avatar_upload_url": avatar_upload_url,
     })

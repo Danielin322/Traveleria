@@ -1,13 +1,15 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
-import React, { useEffect, useMemo, useState } from "react";
+import { useFocusEffect } from "expo-router";
+import React, { useCallback, useMemo, useState } from "react";
 import {
+    ActivityIndicator,
     Alert,
     Animated,
     FlatList,
     Image,
     Modal,
+    RefreshControl,
     StyleSheet,
     Text,
     TextInput,
@@ -25,40 +27,94 @@ import {
     ThemeColors,
 } from "../../constants/theme";
 import { useThemeColors } from "../../contexts/ThemeContext";
+import { ColorPalettePicker } from "../../components/ColorPalettePicker";
+import { IconPicker } from "../../components/IconPicker";
+import {
+    DEFAULT_CARD_COLOR,
+    WalletIcon,
+    resolveIcon,
+} from "../../constants/walletIcons";
+import { readableTextColor } from "../../utils/color";
+import {
+    WalletDocument,
+    createDocument,
+    deleteDocument,
+    listDocuments,
+    updateDocument,
+} from "../../services/walletService";
 
-// Apple Wallet style colors
-const APPLE_COLORS = [
-  "#000000",
-  "#FF3B30",
-  "#FF9500",
-  "#34C759",
-  "#007AFF",
-  "#5856D6",
-];
-
-const STORAGE_KEY = "wallet_documents";
+/**
+ * A live miniature of the card being edited.
+ *
+ * The only place the contrast rule is visible before saving: pick a pale
+ * yellow and the title flips to dark here, so the pairing is confirmed at the
+ * moment it is chosen rather than discovered in the list afterwards.
+ */
+function CardPreview({
+  title,
+  color,
+  icon,
+  styles,
+}: {
+  title: string;
+  color: string;
+  icon: WalletIcon;
+  styles: ReturnType<typeof makeStyles>;
+}) {
+  const ink = readableTextColor(color);
+  return (
+    <View style={[styles.preview, { backgroundColor: color }]}>
+      <Ionicons name={icon} size={20} color={ink} style={styles.cardIcon} />
+      <Text style={[styles.previewTitle, { color: ink }]} numberOfLines={1}>
+        {title.trim() || "Document name"}
+      </Text>
+      <Ionicons name="ellipsis-horizontal" size={20} color={ink} />
+    </View>
+  );
+}
 
 export default function WalletScreen() {
   const colors = useThemeColors();
   const styles = useMemo(() => makeStyles(colors), [colors]);
 
-  const [documents, setDocuments] = useState<any[]>([]);
+  const [documents, setDocuments] = useState<WalletDocument[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
-  useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY).then((raw) => {
-      if (raw) setDocuments(JSON.parse(raw));
-    });
+  const loadDocuments = useCallback(async () => {
+    try {
+      setError(null);
+      setDocuments(await listDocuments());
+    } catch (err) {
+      setError((err as Error).message);
+      console.error("Error loading wallet:", err);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  const saveDocuments = (docs: any[]) => {
-    setDocuments(docs);
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(docs));
+  // Viewing URLs are presigned and expire, so the list is refetched whenever
+  // the tab regains focus rather than being held from the last visit. This
+  // also means signing in as another account never shows stale documents.
+  useFocusEffect(
+    useCallback(() => {
+      loadDocuments();
+    }, [loadDocuments]),
+  );
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await loadDocuments();
+    setRefreshing(false);
   };
 
   // State for Add Document Modal
   const [isAddModalVisible, setAddModalVisible] = useState(false);
   const [newDocTitle, setNewDocTitle] = useState("");
-  const [newDocColor, setNewDocColor] = useState(APPLE_COLORS[0]);
+  const [newDocColor, setNewDocColor] = useState(DEFAULT_CARD_COLOR);
+  const [newDocIcon, setNewDocIcon] = useState<WalletIcon>("document");
 
   // State for Document Viewer Modal
   const [selectedDoc, setSelectedDoc] = useState<any>(null);
@@ -67,27 +123,43 @@ export default function WalletScreen() {
   const [isEditModalVisible, setEditModalVisible] = useState(false);
   const [editingDoc, setEditingDoc] = useState<any>(null);
   const [editDocTitle, setEditDocTitle] = useState("");
-  const [editDocColor, setEditDocColor] = useState(APPLE_COLORS[0]);
+  const [editDocColor, setEditDocColor] = useState(DEFAULT_CARD_COLOR);
+  const [editDocIcon, setEditDocIcon] = useState<WalletIcon>("document");
 
   // Create Document Function
   const handleCreate = async () => {
+    if (isSaving) return;
     if (!newDocTitle.trim()) {
       Alert.alert("Name required", "Please enter a document name.");
       return;
     }
-    let result = await DocumentPicker.getDocumentAsync({ type: "*/*" });
-    if (!result.canceled) {
-      const newDoc = {
-        id: Math.random().toString(),
-        title: newDocTitle,
+
+    const result = await DocumentPicker.getDocumentAsync({ type: "*/*" });
+    if (result.canceled) return;
+
+    const asset = result.assets[0];
+    setIsSaving(true);
+    try {
+      await createDocument({
+        title: newDocTitle.trim(),
         color: newDocColor,
-        uri: result.assets[0].uri,
-        mimeType: result.assets[0].mimeType,
-      };
-      saveDocuments([newDoc, ...documents]);
+        icon: newDocIcon,
+        uri: asset.uri,
+        fileName: asset.name,
+        mimeType: asset.mimeType || "application/octet-stream",
+        size: asset.size,
+      });
+      // The list comes back from the server rather than being patched
+      // locally, so the card always carries a fresh presigned URL.
+      await loadDocuments();
       setAddModalVisible(false);
       setNewDocTitle("");
-      setNewDocColor(APPLE_COLORS[0]);
+      setNewDocColor(DEFAULT_CARD_COLOR);
+      setNewDocIcon("document");
+    } catch (err) {
+      Alert.alert("Could not add document", (err as Error).message);
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -95,24 +167,48 @@ export default function WalletScreen() {
   const openEditMenu = (doc: any) => {
     setEditingDoc(doc);
     setEditDocTitle(doc.title);
-    setEditDocColor(doc.color);
+    setEditDocColor(doc.color || DEFAULT_CARD_COLOR);
+    // Falls back to the mime-inferred icon, so editing an older document
+    // saves the icon it was already showing rather than a blank one.
+    setEditDocIcon(resolveIcon(doc.icon, doc.mimeType));
     setEditModalVisible(true);
   };
 
-  const handleSaveEdit = () => {
+  const handleSaveEdit = async () => {
+    if (isSaving) return;
     if (!editDocTitle.trim()) {
       Alert.alert("Name required", "Please enter a document name.");
       return;
     }
-    saveDocuments(
-      documents.map((doc) =>
-        doc.id === editingDoc.id
-          ? { ...doc, title: editDocTitle, color: editDocColor }
-          : doc,
-      ),
-    );
-    setEditModalVisible(false);
-    setEditingDoc(null);
+
+    setIsSaving(true);
+    try {
+      await updateDocument(editingDoc.id, {
+        title: editDocTitle.trim(),
+        color: editDocColor,
+        icon: editDocIcon,
+      });
+      // Renaming touches no S3 object, so the existing URLs stay valid and
+      // the list can be patched in place.
+      setDocuments((prev) =>
+        prev.map((doc) =>
+          doc.id === editingDoc.id
+            ? {
+                ...doc,
+                title: editDocTitle.trim(),
+                color: editDocColor,
+                icon: editDocIcon,
+              }
+            : doc,
+        ),
+      );
+      setEditModalVisible(false);
+      setEditingDoc(null);
+    } catch (err) {
+      Alert.alert("Could not save changes", (err as Error).message);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // Deleting a document cannot be undone, so confirm first — matching the
@@ -126,10 +222,17 @@ export default function WalletScreen() {
         {
           text: "Delete",
           style: "destructive",
-          onPress: () => {
-            saveDocuments(documents.filter((doc) => doc.id !== editingDoc.id));
-            setEditModalVisible(false);
-            setEditingDoc(null);
+          onPress: async () => {
+            const target = editingDoc;
+            try {
+              await deleteDocument(target.id);
+              setDocuments((prev) => prev.filter((doc) => doc.id !== target.id));
+              setEditModalVisible(false);
+              setEditingDoc(null);
+            } catch (err) {
+              // Leave the sheet open so the retry is one tap away.
+              Alert.alert("Could not delete", (err as Error).message);
+            }
           },
         },
       ],
@@ -137,28 +240,47 @@ export default function WalletScreen() {
   };
 
   // Render each document card
-  const renderItem = ({ item, index }: any) => (
-    <TouchableOpacity activeOpacity={0.9} onPress={() => setSelectedDoc(item)}>
-      <Animated.View
-        style={[
-          styles.card,
-          { backgroundColor: item.color, marginTop: index === 0 ? 0 : -100 },
-        ]}
-      >
-        <View style={styles.cardHeader}>
-          <Text style={styles.cardTopTitle}>{item.title}</Text>
+  const renderItem = ({ item, index }: any) => {
+    const cardColor = item.color || DEFAULT_CARD_COLOR;
+    // Cards can now be any of ~300 colours, so the foreground is derived from
+    // the background rather than assumed white.
+    const ink = readableTextColor(cardColor);
 
-          {/* The new 3-dots options button */}
-          <TouchableOpacity
-            style={styles.optionsButton}
-            onPress={() => openEditMenu(item)}
-          >
-            <Ionicons name="ellipsis-horizontal" size={24} color="#fff" />
-          </TouchableOpacity>
-        </View>
-      </Animated.View>
-    </TouchableOpacity>
-  );
+    return (
+      <TouchableOpacity
+        activeOpacity={0.9}
+        onPress={() => setSelectedDoc(item)}
+        // The overlap lives on the touchable, not on the card inside it. With
+        // the negative margin on the child, this view measured 100px tall
+        // while the card drew 200px, so the lower half of every card fell
+        // outside its own touch target — visible, but dead to taps on
+        // Android. Offsetting the target itself keeps the two boxes identical.
+        style={{ marginTop: index === 0 ? 0 : -100 }}
+      >
+        <Animated.View style={[styles.card, { backgroundColor: cardColor }]}>
+          {/* Cards overlap by 100px, so only this header strip is reliably
+              visible — everything identifying the card has to live here. */}
+          <View style={styles.cardHeader}>
+            <Ionicons
+              name={resolveIcon(item.icon, item.mimeType)}
+              size={22}
+              color={ink}
+              style={styles.cardIcon}
+            />
+            <Text style={[styles.cardTopTitle, { color: ink }]}>{item.title}</Text>
+
+            {/* The new 3-dots options button */}
+            <TouchableOpacity
+              style={styles.optionsButton}
+              onPress={() => openEditMenu(item)}
+            >
+              <Ionicons name="ellipsis-horizontal" size={24} color={ink} />
+            </TouchableOpacity>
+          </View>
+        </Animated.View>
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <View style={styles.container}>
@@ -172,22 +294,56 @@ export default function WalletScreen() {
         </TouchableOpacity>
       </View>
 
-      <FlatList
-        data={documents}
-        renderItem={renderItem}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.listContent}
-        showsVerticalScrollIndicator={false}
-        ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Ionicons name="card-outline" size={52} color={colors.textDisabled} />
-            <Text style={styles.emptyText}>No documents yet</Text>
-            <Text style={styles.emptySubText}>
-              Tap + to add a boarding pass, ticket or booking.
-            </Text>
-          </View>
-        }
-      />
+      {loading ? (
+        <ActivityIndicator
+          size="large"
+          color={colors.primary}
+          style={{ marginTop: 60 }}
+        />
+      ) : (
+        <FlatList
+          data={documents}
+          renderItem={renderItem}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              tintColor={colors.primary}
+            />
+          }
+          ListEmptyComponent={
+            error ? (
+              <View style={styles.emptyState}>
+                <Ionicons
+                  name="cloud-offline-outline"
+                  size={52}
+                  color={colors.textDisabled}
+                />
+                <Text style={styles.emptyText}>Could not load your wallet</Text>
+                <Text style={styles.emptySubText}>{error}</Text>
+                <TouchableOpacity
+                  onPress={handleRefresh}
+                  style={styles.retryButton}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.retryText}>Try again</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.emptyState}>
+                <Ionicons name="card-outline" size={52} color={colors.textDisabled} />
+                <Text style={styles.emptyText}>No documents yet</Text>
+                <Text style={styles.emptySubText}>
+                  Tap + to add a boarding pass, ticket or booking.
+                </Text>
+              </View>
+            )
+          }
+        />
+      )}
 
       {/* --- Add Document Modal --- */}
       <Modal visible={isAddModalVisible} transparent animationType="slide">
@@ -201,20 +357,21 @@ export default function WalletScreen() {
               value={newDocTitle}
               onChangeText={setNewDocTitle}
             />
-            <Text style={styles.colorLabel}>Choose Label Color:</Text>
-            <View style={styles.colorPicker}>
-              {APPLE_COLORS.map((color) => (
-                <TouchableOpacity
-                  key={color}
-                  style={[
-                    styles.colorCircle,
-                    { backgroundColor: color },
-                    newDocColor === color && styles.selectedColorCircle,
-                  ]}
-                  onPress={() => setNewDocColor(color)}
-                />
-              ))}
-            </View>
+            <IconPicker
+              value={newDocIcon}
+              onChange={setNewDocIcon}
+              cardColor={newDocColor}
+            />
+
+            <ColorPalettePicker value={newDocColor} onChange={setNewDocColor} />
+
+            <CardPreview
+              title={newDocTitle}
+              color={newDocColor}
+              icon={newDocIcon}
+              styles={styles}
+            />
+
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={styles.cancelBtn}
@@ -222,8 +379,16 @@ export default function WalletScreen() {
               >
                 <Text style={styles.cancelBtnText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.createBtn} onPress={handleCreate}>
-                <Text style={styles.createBtnText}>Create</Text>
+              <TouchableOpacity
+                style={[styles.createBtn, isSaving && styles.btnBusy]}
+                onPress={handleCreate}
+                disabled={isSaving}
+              >
+                {isSaving ? (
+                  <ActivityIndicator size="small" color={colors.primaryContrast} />
+                ) : (
+                  <Text style={styles.createBtnText}>Create</Text>
+                )}
               </TouchableOpacity>
             </View>
           </View>
@@ -244,20 +409,20 @@ export default function WalletScreen() {
               onChangeText={setEditDocTitle}
             />
 
-            <Text style={styles.colorLabel}>Change Label Color:</Text>
-            <View style={styles.colorPicker}>
-              {APPLE_COLORS.map((color) => (
-                <TouchableOpacity
-                  key={color}
-                  style={[
-                    styles.colorCircle,
-                    { backgroundColor: color },
-                    editDocColor === color && styles.selectedColorCircle,
-                  ]}
-                  onPress={() => setEditDocColor(color)}
-                />
-              ))}
-            </View>
+            <IconPicker
+              value={editDocIcon}
+              onChange={setEditDocIcon}
+              cardColor={editDocColor}
+            />
+
+            <ColorPalettePicker value={editDocColor} onChange={setEditDocColor} />
+
+            <CardPreview
+              title={editDocTitle}
+              color={editDocColor}
+              icon={editDocIcon}
+              styles={styles}
+            />
 
             <View style={styles.modalButtons}>
               <TouchableOpacity
@@ -267,10 +432,15 @@ export default function WalletScreen() {
                 <Text style={styles.cancelBtnText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={styles.createBtn}
+                style={[styles.createBtn, isSaving && styles.btnBusy]}
                 onPress={handleSaveEdit}
+                disabled={isSaving}
               >
-                <Text style={styles.createBtnText}>Save</Text>
+                {isSaving ? (
+                  <ActivityIndicator size="small" color={colors.primaryContrast} />
+                ) : (
+                  <Text style={styles.createBtnText}>Save</Text>
+                )}
               </TouchableOpacity>
             </View>
 
@@ -309,18 +479,17 @@ export default function WalletScreen() {
           <View style={styles.documentContainer}>
             {selectedDoc?.mimeType?.includes("image") ? (
               <Image
-                source={{ uri: selectedDoc.uri }}
+                source={{ uri: selectedDoc.url }}
                 style={styles.fullDocImage}
                 resizeMode="contain"
               />
             ) : (
               <WebView
-                source={{ uri: selectedDoc?.uri }}
+                source={{ uri: selectedDoc?.url }}
                 style={styles.webview}
-                originWhitelist={["*"]}
-                allowFileAccess={true}
-                allowFileAccessFromFileURLs={true}
-                allowUniversalAccessFromFileURLs={true}
+                // No allowFileAccess* any more: documents are fetched over
+                // https from S3, never from the device filesystem.
+                startInLoadingState
               />
             )}
           </View>
@@ -358,6 +527,19 @@ const makeStyles = (colors: ThemeColors) =>
       flexGrow: 1,
     },
     emptyState: { alignItems: "center", marginTop: 60 },
+    retryButton: {
+      marginTop: Spacing.xl,
+      paddingHorizontal: Spacing.xl,
+      paddingVertical: Spacing.md,
+      borderRadius: Radius.md,
+      backgroundColor: colors.surfaceAlt,
+    },
+    retryText: {
+      color: colors.primary,
+      fontFamily: FontFamily.semibold,
+      fontSize: FontSize.small,
+    },
+    btnBusy: { opacity: 0.7 },
     emptyText: {
       fontSize: FontSize.h3,
       fontFamily: FontFamily.semibold,
@@ -372,8 +554,9 @@ const makeStyles = (colors: ThemeColors) =>
       textAlign: "center",
     },
 
-    // Wallet Card Styles. Cards keep the user-chosen APPLE_COLORS in both
-    // themes, so their white text stays correct either way.
+    // Wallet Card Styles. The card colour is user-chosen and identical in both
+    // themes; its foreground comes from readableTextColor rather than being
+    // fixed, since the palette now includes light colours.
     card: {
       height: 200,
       width: "100%",
@@ -390,8 +573,8 @@ const makeStyles = (colors: ThemeColors) =>
       alignItems: "center",
       justifyContent: "space-between",
     },
+    cardIcon: { marginRight: Spacing.md },
     cardTopTitle: {
-      color: "#fff",
       fontSize: FontSize.h3,
       fontFamily: FontFamily.bold,
       textTransform: "uppercase",
@@ -399,7 +582,24 @@ const makeStyles = (colors: ThemeColors) =>
       flex: 1,
     },
     optionsButton: { padding: Spacing.xs + 1 },
-    cardBody: { flex: 1, justifyContent: "flex-end", marginTop: Spacing.md },
+
+    // Mirrors the real card header at a smaller scale.
+    preview: {
+      flexDirection: "row",
+      alignItems: "center",
+      width: "100%",
+      borderRadius: Radius.lg,
+      paddingHorizontal: Spacing.lg,
+      paddingVertical: Spacing.lg,
+      marginBottom: Spacing.xl,
+    },
+    previewTitle: {
+      flex: 1,
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.bold,
+      textTransform: "uppercase",
+      letterSpacing: 1.2,
+    },
 
     // Add/Edit Modal Styles
     modalOverlay: {
@@ -434,28 +634,6 @@ const makeStyles = (colors: ThemeColors) =>
       borderWidth: 1,
       borderColor: colors.border,
     },
-    colorLabel: {
-      color: colors.textPrimary,
-      alignSelf: "flex-start",
-      marginBottom: Spacing.md,
-      fontSize: FontSize.body,
-      fontFamily: FontFamily.medium,
-    },
-    colorPicker: {
-      flexDirection: "row",
-      justifyContent: "space-between",
-      width: "100%",
-      marginBottom: Spacing.xxxl,
-    },
-    colorCircle: {
-      width: 40,
-      height: 40,
-      borderRadius: 20,
-      borderWidth: 2,
-      borderColor: "transparent",
-    },
-    // Ring follows the theme so it is visible on both light and dark sheets.
-    selectedColorCircle: { borderColor: colors.textPrimary },
     modalButtons: {
       flexDirection: "row",
       justifyContent: "space-between",
