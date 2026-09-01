@@ -13,6 +13,8 @@ export type WalletDocument = {
   id: string;
   title: string;
   color: string | null;
+  /** Ionicons glyph name, or null for documents saved before icons existed. */
+  icon: string | null;
   mimeType: string | null;
   fileName: string | null;
   tripId: string | null;
@@ -48,6 +50,7 @@ export async function listDocuments(): Promise<WalletDocument[]> {
 type NewDocument = {
   title: string;
   color: string;
+  icon: string;
   /** Local file:// URI from the document picker. */
   uri: string;
   fileName: string;
@@ -69,6 +72,7 @@ export async function createDocument(doc: NewDocument): Promise<void> {
     body: JSON.stringify({
       title: doc.title,
       color: doc.color,
+      icon: doc.icon,
       fileName: doc.fileName,
       mimeType: doc.mimeType,
       size: doc.size,
@@ -110,7 +114,7 @@ export async function createDocument(doc: NewDocument): Promise<void> {
 
 export async function updateDocument(
   id: string,
-  changes: { title?: string; color?: string },
+  changes: { title?: string; color?: string; icon?: string },
 ): Promise<void> {
   const response = await apiFetch(`/wallet/${id}`, {
     method: "PUT",

@@ -13,6 +13,7 @@ a client never gets to choose its own key.
 
 import mimetypes
 import os
+import re
 import uuid
 
 import boto3
@@ -35,6 +36,30 @@ VIEW_URL_TTL_SECONDS = 15 * 60
 UPLOAD_URL_TTL_SECONDS = 5 * 60
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+
+# Mirrors WALLET_ICONS in traveleria/constants/walletIcons.ts. Kept here rather
+# than as a CHECK constraint because the set is a UI concern that will change
+# as icons are added or renamed, and a constraint would make every rename a
+# migration. Same reasoning as the open interests set in sql/005.
+WALLET_ICONS = frozenset({
+    # Travel
+    "airplane", "boat", "train", "bus", "car-sport", "bicycle", "subway",
+    # Stay
+    "bed", "home", "business", "key",
+    # Money
+    "card", "cash", "pricetag", "receipt",
+    # Documents
+    "document-text", "id-card", "shield-checkmark", "newspaper", "qr-code",
+    # Activities
+    "restaurant", "ticket", "musical-notes", "camera", "map", "football",
+    # Health
+    "medkit", "fitness",
+    # Fallbacks the client infers from mime_type for documents saved before
+    # icons existed. Accepted so a client can persist what it is showing.
+    "image", "document",
+})
+
+_HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 # SigV4 is required for presigned URLs to validate in every region.
 _s3 = boto3.client("s3", config=Config(signature_version="s3v4"))
@@ -65,6 +90,35 @@ def lambda_handler(event, context):
         return error(str(e), 500)
 
 
+def _clean_icon(body):
+    """Absent means "leave unchanged", which suits the COALESCE in the UPDATE."""
+    if "icon" not in body:
+        return None
+    icon = body.get("icon")
+    if icon in (None, ""):
+        return None
+    if icon not in WALLET_ICONS:
+        raise AppError(f"Unknown icon: {icon}")
+    return icon
+
+
+def _clean_color(body):
+    """
+    Six-digit hex only. Whatever is stored here ends up as a React Native
+    backgroundColor, so it is validated rather than passed through — and
+    lowercased, so #FF3B30 and #ff3b30 do not become two stored values for
+    the same colour.
+    """
+    if "color" not in body:
+        return None
+    color = body.get("color")
+    if color in (None, ""):
+        return None
+    if not isinstance(color, str) or not _HEX_COLOR.match(color):
+        raise AppError(f"Colour must be a hex value like #2f6deb, got: {color}")
+    return color.lower()
+
+
 def _extension_for(file_name: str, mime_type: str) -> str:
     """
     Keeps a sensible extension on the S3 key so the bucket stays browsable.
@@ -92,7 +146,7 @@ def _list_documents(current_user):
         # hiding them keeps a failed attempt from showing as a broken card.
         db.execute(
             """
-            SELECT id, title, color, mime_type, file_name, s3_key, trip_id, created_at
+            SELECT id, title, color, icon, mime_type, file_name, s3_key, trip_id, created_at
             FROM wallet_documents
             WHERE user_id = %s
               AND (upload_status = 'ready' OR created_at > NOW() - INTERVAL '1 hour')
@@ -107,6 +161,7 @@ def _list_documents(current_user):
             "id": str(row["id"]),
             "title": row["title"],
             "color": row["color"],
+            "icon": row["icon"],
             "mimeType": row["mime_type"],
             "fileName": row["file_name"],
             "tripId": str(row["trip_id"]) if row["trip_id"] else None,
@@ -127,6 +182,8 @@ def _create_document(event, current_user):
 
     mime_type = body.get("mimeType") or "application/octet-stream"
     file_name = (body.get("fileName") or "").strip()
+    icon = _clean_icon(body)
+    color = _clean_color(body)
 
     size = body.get("size")
     if isinstance(size, int) and size > MAX_UPLOAD_BYTES:
@@ -139,12 +196,12 @@ def _create_document(event, current_user):
         db.execute(
             """
             INSERT INTO wallet_documents
-                (id, user_id, document_type, s3_key, title, color, mime_type, file_name, upload_status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending')
+                (id, user_id, document_type, s3_key, title, color, icon, mime_type, file_name, upload_status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending')
             RETURNING id
             """,
             (document_id, current_user["id"], mime_type, s3_key, title,
-             body.get("color"), mime_type, file_name),
+             color, icon, mime_type, file_name),
         )
         db.fetchone()
 
@@ -172,6 +229,8 @@ def _update_document(event, current_user):
     # Marking an upload complete and renaming a card are the same request
     # shape, so one endpoint covers both.
     confirm = bool(body.get("confirmUpload"))
+    icon = _clean_icon(body)
+    color = _clean_color(body)
 
     title = body.get("title")
     if title is not None:
@@ -187,12 +246,13 @@ def _update_document(event, current_user):
             UPDATE wallet_documents
             SET title = COALESCE(%s, title),
                 color = COALESCE(%s, color),
+                icon = COALESCE(%s, icon),
                 upload_status = CASE WHEN %s THEN 'ready' ELSE upload_status END,
                 updated_at = NOW()
             WHERE id = %s AND user_id = %s
-            RETURNING id, title, color, mime_type, file_name, s3_key
+            RETURNING id, title, color, icon, mime_type, file_name, s3_key
             """,
-            (title, body.get("color"), confirm, document_uuid, current_user["id"]),
+            (title, color, icon, confirm, document_uuid, current_user["id"]),
         )
         row = db.fetchone()
         if not row:
@@ -204,6 +264,7 @@ def _update_document(event, current_user):
         "id": str(row["id"]),
         "title": row["title"],
         "color": row["color"],
+        "icon": row["icon"],
         "mimeType": row["mime_type"],
         "fileName": row["file_name"],
         "url": _view_url(row["s3_key"]),
