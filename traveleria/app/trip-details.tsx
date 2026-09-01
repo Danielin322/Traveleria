@@ -100,6 +100,26 @@ export default function TripDetailsScreen() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const googlePlacesRef = useRef<any>(null);
+  const chatListRef = useRef<FlatList>(null);
+
+  // Keeps the newest message (and the typing bubble) in view, since a long
+  // AI reply can otherwise end below the visible area with no scroll hint.
+  useEffect(() => {
+    chatListRef.current?.scrollToEnd({ animated: true });
+  }, [messages]);
+
+  // Pings the chat Lambda as soon as the chat view opens, so its cold start
+  // happens while the user is still reading/typing rather than on their
+  // first real message. Best-effort: a failure here just means no warm-up.
+  useEffect(() => {
+    if (viewMode === "chat") {
+      apiFetch("/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ warmup: true }),
+      }).catch(() => {});
+    }
+  }, [viewMode]);
 
   /**
    * The trip's own dates, which bound the day picker. Null when the screen was
@@ -1033,6 +1053,7 @@ export default function TripDetailsScreen() {
             )}
           </View>
         ) : (
+          <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
           <View style={{ flex: 1 }}>
             <TouchableOpacity
               style={styles.backButton}
@@ -1042,6 +1063,7 @@ export default function TripDetailsScreen() {
             </TouchableOpacity>
 
             <FlatList
+              ref={chatListRef}
               data={messages}
               renderItem={({ item }) => (
                 <View
@@ -1051,6 +1073,7 @@ export default function TripDetailsScreen() {
                   ]}
                 >
                   <Text
+                    selectable
                     style={[
                       styles.messageText,
                       item.isUser ? styles.userText : styles.aiText,
@@ -1089,6 +1112,7 @@ export default function TripDetailsScreen() {
                 editable={!isAiTyping}
                 onSubmitEditing={sendMessage}
                 returnKeyType="send"
+                multiline
               />
               <TouchableOpacity
                 style={[
@@ -1102,6 +1126,7 @@ export default function TripDetailsScreen() {
               </TouchableOpacity>
             </View>
           </View>
+          </TouchableWithoutFeedback>
         )}
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -1437,10 +1462,12 @@ const makeStyles = (colors: ThemeColors) =>
     },
     chatInput: {
       flex: 1,
-      height: 45,
+      minHeight: 45,
+      maxHeight: 120,
       backgroundColor: colors.surfaceSunken,
       borderRadius: 22,
       paddingHorizontal: Spacing.xl,
+      paddingVertical: Spacing.sm,
       marginRight: Spacing.md,
       fontSize: FontSize.body,
       fontFamily: FontFamily.regular,

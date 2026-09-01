@@ -26,6 +26,8 @@ ROUTES = [
     ("GET", re.compile(r"^/$"), health_handler, "/", []),
     ("GET", re.compile(r"^/trips$"), trips_handler, "/trips", []),
     ("POST", re.compile(r"^/trips$"), trips_handler, "/trips", []),
+    ("PUT", re.compile(r"^/trips/([^/]+)$"), trips_handler, "/trips/{trip_id}", ["trip_id"]),
+    ("DELETE", re.compile(r"^/trips/([^/]+)$"), trips_handler, "/trips/{trip_id}", ["trip_id"]),
     ("GET", re.compile(r"^/trips/([^/]+)/itinerary$"), itinerary_handler,
      "/trips/{trip_id}/itinerary", ["trip_id"]),
     ("POST", re.compile(r"^/trips/([^/]+)/itinerary$"), itinerary_handler,

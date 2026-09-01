@@ -27,23 +27,75 @@ _client = OpenAI(api_key=OPENAI_API_KEY)
 MODEL = "gpt-4.1-nano"
 HISTORY_LIMIT = 6
 
-def _build_system_prompt(trip_start, trip_end):
+def _build_system_prompt(trip_start, trip_end, profile):
     num_days = (trip_end - trip_start).days + 1
     day_list = "\n".join(
         f"Day {i + 1}: {(trip_start + timedelta(days=i)).strftime('%d.%m.%Y')}"
         for i in range(num_days)
     )
+
+    profile_lines = []
+    if profile.get("gender") and profile["gender"] != "prefer_not_to_say":
+        profile_lines.append(
+            f"The user's gender is {profile['gender']}. When addressing them in Hebrew, "
+            "use grammatically correct gender-matched verb forms. For example, to a male "
+            "user say \"מה תרצה לעשות?\" and to a female user say \"מה תרצי לעשות?\" — apply "
+            "this pattern consistently."
+        )
+    if profile.get("dietary"):
+        profile_lines.append(
+            f"The user's saved dietary preference(s): {', '.join(profile['dietary'])}. "
+            "Before suggesting a restaurant or food, ask whether to filter by this "
+            "preference for this specific outing — they may be traveling with others who "
+            "eat differently (e.g. a vegan traveling with a non-vegan friend needs a place "
+            "that works for both), so don't assume without asking."
+        )
+    if profile.get("interests"):
+        profile_lines.append(
+            f"The user's interests: {', '.join(profile['interests'])}. Use this as general "
+            "background, not a strict filter — don't limit suggestions to only these "
+            "categories (e.g. if they like food and music, don't suggest only restaurants "
+            "and concerts). Keep recommendations varied and well-rounded; just lean toward "
+            "these interests when a relevant, natural option comes up."
+        )
+    profile_block = ("\n\n" + "\n\n".join(profile_lines)) if profile_lines else ""
+
     return (
         "You are Traveleria's in-app travel assistant. Help the user plan and enjoy "
         "their trip: suggest places, food, and activities, and answer trip-related "
-        "questions. Keep replies short and conversational.\n\n"
+        "questions. Keep replies short, direct, and conversational — skip filler "
+        "phrases and pleasantries and get straight to the useful part. Always reply "
+        "in the same language the user just wrote in — English for an English "
+        f"message, Hebrew for a Hebrew message, and so on.{profile_block}\n\n"
+        "When the user asks for a recommendation (e.g. a restaurant or activity), lead "
+        "with 2-3 concrete suggestions right away — don't ask multiple clarifying questions "
+        "before giving any. Asking about the user's dietary preference (per the note "
+        "above) is fine; skip questions about atmosphere, price range, or area unless "
+        "the user brings them up. A light follow-up question after the suggestions is "
+        "fine too. For example:\n\n"
+        "Here are two top vegan options in Rome representing different dining styles:\n\n"
+        "Buddy Veggy Restaurant Café (Central Rome / near Campo de' Fiori): A trendy "
+        "bistro serving indulgent 100% plant-based twists on classic Roman favorites, "
+        "including creamy carbonara, cacio e pepe, pizzas, and desserts.\n\n"
+        "Ops! (Salario district / near Villa Borghese): A high-quality vegan buffet "
+        "charged by weight, featuring a vast selection of Mediterranean dishes, roasted "
+        "vegetables, fresh focaccia, and wholesome warm mains.\n\n"
+        "Which neighborhood in Rome will you be exploring, and what vibe are you aiming "
+        "for — traditional Roman pasta/pizza, casual quick bites, or a relaxed sit-down "
+        "dinner?\n\n"
         f"The trip's days are:\n{day_list}\n\n"
         "When the user refers to a day by number (e.g. \"day 3\"), use the exact date "
         "from this list above — do not calculate it yourself.\n\n"
-        "If the user agrees to add a place you suggested to their itinerary, ask for "
-        "the exact visit time AND which day of the trip if they haven't given both, "
-        "then call add_itinerary_item once you have the place name, the day (in "
-        "DD.MM.YYYY format, taken from the list above), and the time. "
+        "Never call add_itinerary_item proactively while just brainstorming or giving "
+        "general suggestions — only when the user explicitly asks or confirms adding "
+        "something to their itinerary. If the user agrees to add a place you suggested "
+        "to their itinerary but hasn't already told you both the day and the time, do "
+        "NOT add it yet and do NOT guess "
+        "or pick a day/time yourself — ask for both together in a single message (e.g. "
+        "\"Which day and what time works for you?\") and wait for their answer. If you "
+        "suggested more than one place and it's unclear which one they mean, ask which "
+        "one first. Only call add_itinerary_item once you have the place name, the day "
+        "(in DD.MM.YYYY format, taken from the list above), and the time. "
         "If the user asks you to plan multiple things at once (e.g. a full day), call "
         "add_itinerary_item once per item, all in the same turn. When summarizing "
         "multiple items in your reply, format each one EXACTLY like this example, "
@@ -100,6 +152,8 @@ def lambda_handler(event, context):
     try:
         current_user = get_current_user(event)
         body = parse_body(event)
+        if body.get("warmup"):
+            return success({})
         text = (body.get("text") or "").strip()
         if not text:
             raise AppError("text is required")
@@ -107,8 +161,11 @@ def lambda_handler(event, context):
 
         with get_db() as db:
             trip = _get_owned_trip(db, trip_uuid, current_user["id"])
+            profile = _get_user_profile(db, current_user["id"])
             history = _load_history(db, trip_uuid, current_user["id"])
-            reply, added_items, removed_ids = _run_conversation(db, trip_uuid, current_user["id"], trip, history, text)
+            reply, added_items, removed_ids = _run_conversation(
+                db, trip_uuid, current_user["id"], trip, profile, history, text
+            )
             _save_message(db, trip_uuid, current_user["id"], "user", text)
             _save_message(db, trip_uuid, current_user["id"], "assistant", reply)
 
@@ -135,6 +192,11 @@ def _get_owned_trip(db, trip_id, user_id):
     return row
 
 
+def _get_user_profile(db, user_id):
+    db.execute("SELECT gender, dietary, interests FROM users WHERE id = %s", (user_id,))
+    return db.fetchone()
+
+
 def _load_history(db, trip_id, user_id):
     db.execute(
         """
@@ -148,8 +210,8 @@ def _load_history(db, trip_id, user_id):
     return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
 
 
-def _run_conversation(db, trip_id, user_id, trip, history, text):
-    system_prompt = _build_system_prompt(trip["start_date"], trip["end_date"])
+def _run_conversation(db, trip_id, user_id, trip, profile, history, text):
+    system_prompt = _build_system_prompt(trip["start_date"], trip["end_date"], profile)
     messages = [{"role": "system", "content": system_prompt}, *history, {"role": "user", "content": text}]
     response = _client.chat.completions.create(model=MODEL, messages=messages, tools=TOOLS, temperature=0.3)
     choice = response.choices[0].message
