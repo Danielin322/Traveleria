@@ -10,6 +10,10 @@
 #   COGNITO_APP_CLIENT_ID=your-client-id
 #   OPENAI_API_KEY=your-openai-api-key
 #   GOOGLE_PLACES_API_KEY=your-google-places-api-key   (optional — enables map pins for chat-added items)
+#   WALLET_BUCKET=your-s3-bucket-name   (optional — defaults to
+#                                        traveleria-wallet-<account-id>;
+#                                        the bucket itself must already exist,
+#                                        this script does not create it)
 # See .env.example for a template.
 
 set -euo pipefail
@@ -35,8 +39,16 @@ ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/LabRole"
 
 COGNITO_REGION="${COGNITO_REGION:-us-east-1}"
 GOOGLE_PLACES_API_KEY="${GOOGLE_PLACES_API_KEY:-}"
+WALLET_BUCKET="${WALLET_BUCKET:-traveleria-wallet-${ACCOUNT_ID}}"
 
-ENV_JSON="{\"Variables\":{\"DATABASE_URL\":\"${DATABASE_URL}\",\"COGNITO_REGION\":\"${COGNITO_REGION}\",\"COGNITO_USER_POOL_ID\":\"${COGNITO_USER_POOL_ID}\",\"COGNITO_APP_CLIENT_ID\":\"${COGNITO_APP_CLIENT_ID}\",\"OPENAI_API_KEY\":\"${OPENAI_API_KEY}\",\"GOOGLE_PLACES_API_KEY\":\"${GOOGLE_PLACES_API_KEY}\"}}"
+if ! aws s3api head-bucket --bucket "$WALLET_BUCKET" --region "$REGION" 2>/dev/null; then
+    echo "WARNING: S3 bucket '${WALLET_BUCKET}' not found or not readable."
+    echo "         Wallet uploads and the profile photo will fail until it exists:"
+    echo "           aws s3 mb s3://${WALLET_BUCKET} --region ${REGION}"
+    echo ""
+fi
+
+ENV_JSON="{\"Variables\":{\"DATABASE_URL\":\"${DATABASE_URL}\",\"COGNITO_REGION\":\"${COGNITO_REGION}\",\"COGNITO_USER_POOL_ID\":\"${COGNITO_USER_POOL_ID}\",\"COGNITO_APP_CLIENT_ID\":\"${COGNITO_APP_CLIENT_ID}\",\"OPENAI_API_KEY\":\"${OPENAI_API_KEY}\",\"GOOGLE_PLACES_API_KEY\":\"${GOOGLE_PLACES_API_KEY}\",\"WALLET_BUCKET\":\"${WALLET_BUCKET}\"}}"
 
 LAMBDAS=(
     "health"
@@ -44,6 +56,7 @@ LAMBDAS=(
     "itinerary"
     "users"
     "chat"
+    "wallet"
 )
 
 # ── Step 0: Delete all existing traveleria Lambdas and API Gateway ────────
@@ -63,6 +76,7 @@ ALL_OLD_LAMBDAS=(
     "traveleria-trips"
     "traveleria-itinerary"
     "traveleria-users"
+    "traveleria-wallet"
 )
 
 for FNAME in "${ALL_OLD_LAMBDAS[@]}"; do
@@ -146,6 +160,7 @@ deploy_lambda "traveleria-trips"      "lambda_trips.zip"
 deploy_lambda "traveleria-itinerary"  "lambda_itinerary.zip"
 deploy_lambda "traveleria-users"      "lambda_users.zip"
 deploy_lambda "traveleria-chat"       "lambda_chat.zip"
+deploy_lambda "traveleria-wallet"     "lambda_wallet.zip"
 
 # ── Step 4: Create API Gateway ─────────────────────────────────────────────
 echo ""
@@ -199,6 +214,8 @@ EVENT_ID=$(make_resource "$ITIN_ID"  "{event_id}")
 USERS_ID=$(make_resource "$ROOT_ID"  "users")
 ME_ID=$(make_resource    "$USERS_ID" "me")
 CHAT_ID=$(make_resource  "$ROOT_ID"  "chat")
+WALLET_ID=$(make_resource "$ROOT_ID"   "wallet")
+DOC_ID=$(make_resource    "$WALLET_ID" "{document_id}")
 
 echo "  Wiring routes → Lambdas..."
 add_method "$ROOT_ID"  "GET"    "traveleria-health"
@@ -214,6 +231,10 @@ add_method "$ME_ID"    "GET"    "traveleria-users"
 add_method "$ME_ID"    "PATCH"  "traveleria-users"
 add_method "$CHAT_ID"  "GET"    "traveleria-chat"
 add_method "$CHAT_ID"  "POST"   "traveleria-chat"
+add_method "$WALLET_ID" "GET"    "traveleria-wallet"
+add_method "$WALLET_ID" "POST"   "traveleria-wallet"
+add_method "$DOC_ID"    "PUT"    "traveleria-wallet"
+add_method "$DOC_ID"    "DELETE" "traveleria-wallet"
 
 echo "  Deploying to stage 'prod'..."
 aws apigateway create-deployment \
@@ -224,7 +245,7 @@ API_URL="https://${API_ID}.execute-api.${REGION}.amazonaws.com/prod"
 
 echo ""
 echo "======================================================"
-echo "  Done! 5 Lambdas + API Gateway deployed."
+echo "  Done! 6 Lambdas + API Gateway deployed."
 echo "======================================================"
 echo ""
 echo "  API URL:  ${API_URL}"

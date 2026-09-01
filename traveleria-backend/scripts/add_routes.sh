@@ -93,6 +93,22 @@ CHAT_ID=$(resource_id "/chat")
 ensure_method "$CHAT_ID" "GET" "traveleria-chat" "/chat"
 
 echo ""
+echo "Wallet documents:"
+if aws lambda get-function --function-name traveleria-wallet --region "$REGION" >/dev/null 2>&1; then
+    WALLET_ID=$(ensure_resource "/" "wallet")
+    DOC_ID=$(ensure_resource "/wallet" "{document_id}")
+    ensure_method "$WALLET_ID" "GET"    "traveleria-wallet" "/wallet"
+    ensure_method "$WALLET_ID" "POST"   "traveleria-wallet" "/wallet"
+    ensure_method "$DOC_ID"    "PUT"    "traveleria-wallet" "/wallet/{document_id}"
+    ensure_method "$DOC_ID"    "DELETE" "traveleria-wallet" "/wallet/{document_id}"
+else
+    # Wiring a route to a function that does not exist would produce a route
+    # that 500s, which is worse than no route at all.
+    echo "  ! traveleria-wallet does not exist yet — skipping."
+    echo "    Create it first, then re-run this script."
+fi
+
+echo ""
 echo "Redeploying stage '${STAGE}'..."
 aws apigateway create-deployment --rest-api-id "$API_ID" \
     --stage-name "$STAGE" --region "$REGION" >/dev/null
