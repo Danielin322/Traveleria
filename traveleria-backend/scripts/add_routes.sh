@@ -88,6 +88,10 @@ TRIP_ID=$(ensure_resource "/trips" "{trip_id}")
 ensure_method "$TRIP_ID" "PUT"    "traveleria-trips" "/trips/{trip_id}"
 ensure_method "$TRIP_ID" "DELETE" "traveleria-trips" "/trips/{trip_id}"
 
+echo "Chat history:"
+CHAT_ID=$(resource_id "/chat")
+ensure_method "$CHAT_ID" "GET" "traveleria-chat" "/chat"
+
 echo ""
 echo "Redeploying stage '${STAGE}'..."
 aws apigateway create-deployment --rest-api-id "$API_ID" \

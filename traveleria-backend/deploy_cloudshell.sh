@@ -212,6 +212,7 @@ add_method "$EVENT_ID" "PUT"    "traveleria-itinerary"
 add_method "$EVENT_ID" "DELETE" "traveleria-itinerary"
 add_method "$ME_ID"    "GET"    "traveleria-users"
 add_method "$ME_ID"    "PATCH"  "traveleria-users"
+add_method "$CHAT_ID"  "GET"    "traveleria-chat"
 add_method "$CHAT_ID"  "POST"   "traveleria-chat"
 
 echo "  Deploying to stage 'prod'..."

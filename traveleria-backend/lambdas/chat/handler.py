@@ -151,6 +151,11 @@ TOOLS = [ADD_ITEM_TOOL, REMOVE_ITEM_TOOL]
 def lambda_handler(event, context):
     try:
         current_user = get_current_user(event)
+
+        if event.get("httpMethod") == "GET":
+            trip_uuid = parse_uuid((event.get("queryStringParameters") or {}).get("trip_id", ""), "trip_id")
+            return _get_chat_history(trip_uuid, current_user["id"])
+
         body = parse_body(event)
         if body.get("warmup"):
             return success({})
@@ -190,6 +195,22 @@ def _get_owned_trip(db, trip_id, user_id):
     if not row:
         raise AppError("Trip not found", status=404)
     return row
+
+
+def _get_chat_history(trip_id, user_id):
+    with get_db() as db:
+        db.execute("SELECT id FROM trips WHERE id = %s AND owner_user_id = %s", (trip_id, user_id))
+        if not db.fetchone():
+            raise AppError("Trip not found", status=404)
+        db.execute(
+            "SELECT id, role, content FROM chat_messages WHERE trip_id = %s AND user_id = %s ORDER BY created_at",
+            (trip_id, user_id),
+        )
+        rows = db.fetchall()
+    return success([
+        {"id": str(row["id"]), "text": row["content"], "isUser": row["role"] == "user"}
+        for row in rows
+    ])
 
 
 def _get_user_profile(db, user_id):

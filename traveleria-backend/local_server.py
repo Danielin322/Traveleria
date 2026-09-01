@@ -11,7 +11,7 @@ import re
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -38,13 +38,16 @@ ROUTES = [
      "/trips/{trip_id}/itinerary/{event_id}", ["trip_id", "event_id"]),
     ("GET", re.compile(r"^/users/me$"), users_handler, "/users/me", []),
     ("PATCH", re.compile(r"^/users/me$"), users_handler, "/users/me", []),
+    ("GET", re.compile(r"^/chat$"), chat_handler, "/chat", []),
     ("POST", re.compile(r"^/chat$"), chat_handler, "/chat", []),
 ]
 
 
 class Handler(BaseHTTPRequestHandler):
     def _dispatch(self, method):
-        path = urlsplit(self.path).path
+        parsed = urlsplit(self.path)
+        path = parsed.path
+        query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
         for route_method, pattern, fn, resource, param_names in ROUTES:
             if route_method != method:
                 continue
@@ -58,6 +61,7 @@ class Handler(BaseHTTPRequestHandler):
                 "resource": resource,
                 "path": path,
                 "pathParameters": dict(zip(param_names, match.groups())) or None,
+                "queryStringParameters": query or None,
                 "headers": dict(self.headers.items()),
                 "body": raw_body,
             }

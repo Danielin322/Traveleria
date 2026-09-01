@@ -101,18 +101,18 @@ export default function TripDetailsScreen() {
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const googlePlacesRef = useRef<any>(null);
   const chatListRef = useRef<FlatList>(null);
-
-  // Keeps the newest message (and the typing bubble) in view, since a long
-  // AI reply can otherwise end below the visible area with no scroll hint.
-  useEffect(() => {
-    chatListRef.current?.scrollToEnd({ animated: true });
-  }, [messages]);
+  const chatRevealTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Hides the chat list until it has already been scrolled to the latest
+  // message, so opening the chat never shows the pre-scroll jump.
+  const [isChatReady, setIsChatReady] = useState(false);
 
   // Pings the chat Lambda as soon as the chat view opens, so its cold start
   // happens while the user is still reading/typing rather than on their
   // first real message. Best-effort: a failure here just means no warm-up.
   useEffect(() => {
     if (viewMode === "chat") {
+      setIsChatReady(false);
+      if (chatRevealTimer.current) clearTimeout(chatRevealTimer.current);
       apiFetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -468,6 +468,21 @@ export default function TripDetailsScreen() {
 
   useEffect(() => {
     fetchItinerary();
+  }, []);
+
+  useEffect(() => {
+    const fetchChatHistory = async () => {
+      try {
+        const response = await apiFetch(`/chat?trip_id=${id}`);
+        const data = await response.json();
+        if (Array.isArray(data) && data.length > 0) {
+          setMessages(data);
+        }
+      } catch (error) {
+        console.error("Error fetching chat history:", error);
+      }
+    };
+    fetchChatHistory();
   }, []);
 
   const daySections = useMemo(
@@ -1053,7 +1068,6 @@ export default function TripDetailsScreen() {
             )}
           </View>
         ) : (
-          <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
           <View style={{ flex: 1 }}>
             <TouchableOpacity
               style={styles.backButton}
@@ -1065,6 +1079,26 @@ export default function TripDetailsScreen() {
             <FlatList
               ref={chatListRef}
               data={messages}
+              style={{ opacity: isChatReady ? 1 : 0 }}
+              keyboardShouldPersistTaps="handled"
+              onScrollBeginDrag={Keyboard.dismiss}
+              // Fires once real content height is known — on first load with
+              // history, on every new message, and when the typing bubble
+              // appears/disappears. Scrolling here (rather than in a plain
+              // useEffect) avoids racing the list's own layout pass. The
+              // opacity flip only matters the first time: it reveals the
+              // list already sitting at the bottom, instead of the pre-scroll
+              // jump from the top.
+              onContentSizeChange={() => {
+                chatListRef.current?.scrollToEnd({ animated: false });
+                // Content height can settle over several layout passes (each
+                // re-firing this callback), so revealing after a fixed delay
+                // from the first one can still catch a mid-settling jump.
+                // Debouncing instead means we only reveal once the size has
+                // stopped changing, at the true final scroll position.
+                if (chatRevealTimer.current) clearTimeout(chatRevealTimer.current);
+                chatRevealTimer.current = setTimeout(() => setIsChatReady(true), 100);
+              }}
               renderItem={({ item }) => (
                 <View
                   style={[
@@ -1126,7 +1160,6 @@ export default function TripDetailsScreen() {
               </TouchableOpacity>
             </View>
           </View>
-          </TouchableWithoutFeedback>
         )}
       </KeyboardAvoidingView>
     </SafeAreaView>
