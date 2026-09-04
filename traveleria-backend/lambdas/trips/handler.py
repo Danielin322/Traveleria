@@ -131,7 +131,12 @@ def _get_trips(current_user):
                     WHERE td.trip_id = trips.id) AS events_count,
                    (SELECT COUNT(*) FROM trip_collaborators tc2
                     WHERE tc2.trip_id = trips.id AND tc2.status = 'active')
-                       AS collaborators_count
+                       AS collaborators_count,
+                   -- The caller's own collaborator row, so "Leave trip" on the
+                   -- home list does not need a second request to find it.
+                   (SELECT tc3.id FROM trip_collaborators tc3
+                    WHERE tc3.trip_id = trips.id AND tc3.user_id = %(user_id)s
+                      AND tc3.status = 'active') AS membership_id
             FROM trips
             JOIN users owner ON owner.id = trips.owner_user_id
             WHERE {TRIP_ACCESS_PREDICATE}
@@ -149,6 +154,7 @@ def _get_trips(current_user):
                 # "Shared by …" and prefers the name when there is one.
                 "owner_email": row["owner_email"],
                 "owner_name": row["owner_name"],
+                "membership_id": str(row["membership_id"]) if row["membership_id"] else None,
             }
             for row in db.fetchall()
         ])

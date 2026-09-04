@@ -54,6 +54,10 @@ function RootNavigator() {
         <Stack.Screen name="index" />
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen
+          name="invitations"
+          options={{ headerShown: true, title: "Invitations" }}
+        />
+        <Stack.Screen
           name="trip-details"
           options={{
             presentation: "modal",

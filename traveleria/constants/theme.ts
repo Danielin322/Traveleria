@@ -16,6 +16,19 @@ const BRAND = "#2f6deb";
 /** Lighter blue for dark mode — BRAND is too dim against a dark surface. */
 const BRAND_DARK_MODE = "#6b9bff";
 
+/**
+ * Violet marks a trip that is shared with someone else.
+ *
+ * It has to be a colour of its own rather than a reuse. Green, orange and red
+ * already mean ongoing, warning and danger, and being shared is not a status.
+ * Blue is worse: `tripCardSelected` uses `primarySoft` as its background, and
+ * `surfaceAlt` happens to be that same #eef2ff in light mode, so any blue tint
+ * would make every shared card read as permanently selected. Violet is the
+ * nearest hue to the brand that is unmistakably not it.
+ */
+const SHARED = "#6b4ee6";
+const SHARED_DARK_MODE = "#a78bfa";
+
 export const Colors = {
   light: {
     // Surfaces
@@ -39,6 +52,12 @@ export const Colors = {
     success: "#1a9e5c",
     successSoft: "#e6f7ed",
     warning: "#ff9500",
+
+    // Co-edited trips: accent bar and chip, card tint, and the text that sits
+    // on the solid accent.
+    shared: SHARED,
+    sharedSoft: "#f3f0fe",
+    sharedContrast: "#ffffff",
 
     // Lines & scrims
     border: "#e0e0e0",
@@ -77,6 +96,13 @@ export const Colors = {
     success: "#3ddc84",
     successSoft: "#12301f",
     warning: "#ffab2e",
+
+    // #241f36 sits just above `surface` in luminance, so the card reads as
+    // tinted without glowing. The accent bar carries the identity here, where
+    // the tint alone is deliberately subtle.
+    shared: SHARED_DARK_MODE,
+    sharedSoft: "#241f36",
+    sharedContrast: "#0f1316",
 
     // Lines & scrims
     border: "#2d353d",
