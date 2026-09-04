@@ -63,5 +63,35 @@ def get_current_user(event: dict) -> dict:
             (email, cognito_sub),
         )
         user = db.fetchone()
+        _claim_invitations(db, user["id"], user["email"])
 
     return {"id": user["id"], "email": user["email"], "cognito_sub": user["cognito_sub"]}
+
+
+def _claim_invitations(db, user_id, email: str) -> None:
+    """
+    Attach this user to any trip invitation addressed to their email.
+
+    A trip can be shared with someone who has no account yet, so the invitation
+    is stored against the address alone and picked up the first time that
+    address signs in. It runs on every authenticated request and matches
+    nothing at all in the overwhelming majority of them, which
+    idx_trip_collaborators_email_unclaimed makes cheap.
+
+    Note what this deliberately does NOT touch: `status`. Claiming means "this
+    invitation now has a person attached", not "this person is on the trip".
+    Access still requires them to accept it, which is a separate act on a
+    separate screen.
+
+    The email here is the verified Cognito one. When the token carries no email
+    claim, get_current_user substitutes {sub}@cognito.local — a synthetic
+    address that can never match a real invitation, so the fallback is safe.
+    """
+    db.execute(
+        """
+        UPDATE trip_collaborators
+        SET user_id = %s
+        WHERE user_id IS NULL AND email = LOWER(%s)
+        """,
+        (user_id, email),
+    )

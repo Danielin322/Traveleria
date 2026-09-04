@@ -61,23 +61,92 @@ def serialize_trip(row: dict) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Access
+#
+# A trip is reachable by its owner and by anyone holding an ACCEPTED invitation
+# to it. `tc.status = 'active'` below is the whole permission model: a pending
+# or declined invitation is invisible to every trip, itinerary and chat query.
+#
+# Everything goes through these two functions rather than appending
+# `AND owner_user_id = %s` to individual queries, so there is one definition of
+# who may touch a trip and one place to change it.
+# ---------------------------------------------------------------------------
+
+TRIP_ACCESS_PREDICATE = """
+    (trips.owner_user_id = %(user_id)s
+     OR EXISTS (SELECT 1 FROM trip_collaborators tc
+                WHERE tc.trip_id = trips.id
+                  AND tc.user_id = %(user_id)s
+                  AND tc.status = 'active'))
+"""
+
+
+def get_trip_access(db, trip_id: uuid.UUID, user_id: uuid.UUID) -> str | None:
+    """The caller's relationship to a trip: "owner", "editor", or None."""
+    db.execute(
+        f"""
+        SELECT CASE WHEN trips.owner_user_id = %(user_id)s THEN 'owner'
+                    ELSE 'editor' END AS role
+        FROM trips
+        WHERE trips.id = %(trip_id)s AND {TRIP_ACCESS_PREDICATE}
+        """,
+        {"trip_id": trip_id, "user_id": user_id},
+    )
+    row = db.fetchone()
+    return row["role"] if row else None
+
+
+def require_trip_access(
+    db, trip_id: uuid.UUID, user_id: uuid.UUID, owner_only: bool = False
+) -> str:
+    """
+    get_trip_access, raising instead of returning None.
+
+    A trip that does not exist and a trip belonging to someone else are both
+    404, which is the convention every handler already followed — a 403 there
+    would confirm the trip exists.
+
+    owner_only is the deliberate exception: the caller can demonstrably see the
+    trip, so 403 leaks nothing, and "you can leave instead" is the only useful
+    thing to tell them.
+    """
+    role = get_trip_access(db, trip_id, user_id)
+    if role is None:
+        raise AppError("Trip not found", status=404)
+    if owner_only and role != "owner":
+        raise AppError(
+            "Only the trip owner can do that. You can leave the trip instead.",
+            status=403,
+        )
+    return role
+
+
+def touch_trip(db, trip_id: uuid.UUID) -> None:
+    """
+    Bump the trip's updated_at after a change to anything inside it.
+
+    Without this, editing an event leaves the trip row untouched, so there is
+    no single value that answers "has anything in this trip changed?" — which
+    is what a co-editor's client needs in order to know it should refetch.
+    """
+    db.execute("UPDATE trips SET updated_at = NOW() WHERE id = %s", (trip_id,))
+
+
 def get_or_create_trip_day_for_date(
-    db, trip_id: uuid.UUID, owner_user_id: uuid.UUID, day_date: date
+    db, trip_id: uuid.UUID, user_id: uuid.UUID, day_date: date
 ) -> uuid.UUID:
     """
     Resolves the trip_days row for one calendar date, creating it on demand.
 
-    The SELECT doubles as the ownership check, so it must stay ahead of the
-    write: a trip that is missing or belongs to someone else looks identical
-    here, and both are answered with 404.
+    The access check must stay ahead of the write: a trip that is missing and a
+    trip nobody has shared with you look identical from here, and both are
+    answered with 404.
     """
-    db.execute(
-        "SELECT start_date, end_date FROM trips WHERE id = %s AND owner_user_id = %s",
-        (trip_id, owner_user_id),
-    )
+    require_trip_access(db, trip_id, user_id)
+
+    db.execute("SELECT start_date, end_date FROM trips WHERE id = %s", (trip_id,))
     trip = db.fetchone()
-    if not trip:
-        raise AppError("Trip not found", status=404)
 
     if not trip["start_date"] <= day_date <= trip["end_date"]:
         raise AppError(
@@ -86,8 +155,9 @@ def get_or_create_trip_day_for_date(
         )
 
     # trip_days_trip_date_unique makes this a single-statement upsert with no
-    # read-then-write race. DO UPDATE rather than DO NOTHING, because DO
-    # NOTHING returns no row on conflict.
+    # read-then-write race — which now matters for real, because two people can
+    # be adding events to the same day at the same moment. DO UPDATE rather
+    # than DO NOTHING, because DO NOTHING returns no row on conflict.
     db.execute(
         """
         INSERT INTO trip_days (trip_id, day_date) VALUES (%s, %s)
@@ -100,7 +170,7 @@ def get_or_create_trip_day_for_date(
 
 
 def resolve_trip_day(
-    db, trip_id: uuid.UUID, owner_user_id: uuid.UUID, body: dict
+    db, trip_id: uuid.UUID, user_id: uuid.UUID, body: dict
 ) -> tuple[uuid.UUID, date]:
     """
     The trip day an event belongs on, from an optional "date" in the body.
@@ -109,44 +179,38 @@ def resolve_trip_day(
 
     Without a date we fall back to the trip's first day, which is what every
     event got before per-day scheduling existed. That keeps app builds from
-    before this change working against the updated Lambda.
+    before that change working against the updated Lambda.
     """
     raw_date = body.get("date")
     if raw_date in (None, ""):
-        trip_day_id = get_or_create_default_trip_day(db, trip_id, owner_user_id)
+        trip_day_id = get_or_create_default_trip_day(db, trip_id, user_id)
         db.execute("SELECT day_date FROM trip_days WHERE id = %s", (trip_day_id,))
         return trip_day_id, db.fetchone()["day_date"]
 
     day_date = parse_event_date(raw_date)
     return (
-        get_or_create_trip_day_for_date(db, trip_id, owner_user_id, day_date),
+        get_or_create_trip_day_for_date(db, trip_id, user_id, day_date),
         day_date,
     )
 
 
-def get_or_create_default_trip_day(db, trip_id: uuid.UUID, owner_user_id: uuid.UUID) -> uuid.UUID:
+def get_or_create_default_trip_day(db, trip_id: uuid.UUID, user_id: uuid.UUID) -> uuid.UUID:
+    require_trip_access(db, trip_id, user_id)
+
     db.execute(
-        """
-        SELECT trip_days.id FROM trip_days
-        JOIN trips ON trips.id = trip_days.trip_id
-        WHERE trip_days.trip_id = %s AND trips.owner_user_id = %s
-        ORDER BY trip_days.day_date LIMIT 1
-        """,
-        (trip_id, owner_user_id),
+        "SELECT id FROM trip_days WHERE trip_id = %s ORDER BY day_date LIMIT 1",
+        (trip_id,),
     )
     row = db.fetchone()
     if row:
         return row["id"]
+
     db.execute(
         """
         INSERT INTO trip_days (trip_id, day_date)
-        SELECT id, start_date FROM trips
-        WHERE id = %s AND owner_user_id = %s
+        SELECT id, start_date FROM trips WHERE id = %s
         RETURNING id
         """,
-        (trip_id, owner_user_id),
+        (trip_id,),
     )
-    row = db.fetchone()
-    if not row:
-        raise AppError("Trip not found", status=404)
-    return row["id"]
+    return db.fetchone()["id"]

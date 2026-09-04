@@ -88,6 +88,24 @@ TRIP_ID=$(ensure_resource "/trips" "{trip_id}")
 ensure_method "$TRIP_ID" "PUT"    "traveleria-trips" "/trips/{trip_id}"
 ensure_method "$TRIP_ID" "DELETE" "traveleria-trips" "/trips/{trip_id}"
 
+echo ""
+echo "Trip co-editing:"
+COLLABS_ID=$(ensure_resource "/trips/{trip_id}" "collaborators")
+COLLAB_ID=$(ensure_resource "/trips/{trip_id}/collaborators" "{collaborator_id}")
+OWNER_ID=$(ensure_resource "/trips/{trip_id}" "owner")
+ensure_method "$COLLABS_ID" "GET"    "traveleria-trips" "/trips/{trip_id}/collaborators"
+ensure_method "$COLLABS_ID" "POST"   "traveleria-trips" "/trips/{trip_id}/collaborators"
+ensure_method "$COLLAB_ID"  "DELETE" "traveleria-trips" "/trips/{trip_id}/collaborators/{collaborator_id}"
+ensure_method "$OWNER_ID"   "PUT"    "traveleria-trips" "/trips/{trip_id}/owner"
+
+echo ""
+echo "Invitations:"
+INVITES_ID=$(ensure_resource "/" "invitations")
+INVITE_ID=$(ensure_resource "/invitations" "{invitation_id}")
+ensure_method "$INVITES_ID" "GET" "traveleria-trips" "/invitations"
+ensure_method "$INVITE_ID"  "PUT" "traveleria-trips" "/invitations/{invitation_id}"
+
+echo ""
 echo "Chat history:"
 CHAT_ID=$(resource_id "/chat")
 ensure_method "$CHAT_ID" "GET" "traveleria-chat" "/chat"

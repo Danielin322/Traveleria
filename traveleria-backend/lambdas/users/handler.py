@@ -7,7 +7,7 @@ from botocore.config import Config
 from shared.auth import get_current_user
 from shared.database import get_db
 from shared.response import error, success
-from shared.utils import AppError, parse_body
+from shared.utils import TRIP_ACCESS_PREDICATE, AppError, parse_body
 
 # The profile photo lives in the same bucket as wallet documents, under the
 # same per-user prefix. It was previously kept in device-local AsyncStorage,
@@ -180,14 +180,19 @@ def _avatar_upload(current_user, content_type):
 
 def _get_profile(current_user):
     with get_db() as db:
+        # trips_count counts every trip the user can open, not only the ones
+        # they own — otherwise the number under "Trips" on the profile
+        # disagrees with the list on the home screen as soon as anything is
+        # shared with them.
         db.execute(
-            """
+            f"""
             SELECT full_name, country, language, age, interests, gender, dietary,
                    avatar_s3_key,
-                   (SELECT COUNT(*) FROM trips WHERE owner_user_id = %s) AS trips_count
-            FROM users WHERE id = %s
+                   (SELECT COUNT(*) FROM trips WHERE {TRIP_ACCESS_PREDICATE})
+                       AS trips_count
+            FROM users WHERE id = %(user_id)s
             """,
-            (current_user["id"], current_user["id"]),
+            {"user_id": current_user["id"]},
         )
         row = db.fetchone()
     return success({
