@@ -181,7 +181,7 @@ export default function HomeScreen() {
             title: newTitle.trim(),
             // Non-null: validateTripDates above guarantees both dates are set.
             date: formatDateRange(startDate!, endDate!),
-            location: newLocation.trim().toUpperCase(),
+            location: newLocation.trim(),
           }),
         },
       );

@@ -17,7 +17,6 @@ export type WalletDocument = {
   icon: string | null;
   mimeType: string | null;
   fileName: string | null;
-  tripId: string | null;
   /** Presigned GET URL. Short-lived — refetch the list rather than caching it. */
   url: string;
 };

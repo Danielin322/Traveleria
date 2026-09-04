@@ -8,6 +8,8 @@
 #   COGNITO_REGION=us-east-1
 #   COGNITO_USER_POOL_ID=your-pool-id
 #   COGNITO_APP_CLIENT_ID=your-client-id
+#   OPENAI_API_KEY=your-openai-api-key
+#   GOOGLE_PLACES_API_KEY=your-google-places-api-key   (optional — enables map pins for chat-added items)
 #   WALLET_BUCKET=your-s3-bucket-name   (optional — defaults to
 #                                        traveleria-wallet-<account-id>;
 #                                        the bucket itself must already exist,
@@ -28,6 +30,7 @@ set +o allexport
 : "${DATABASE_URL:?DATABASE_URL must be set in .env}"
 : "${COGNITO_USER_POOL_ID:?COGNITO_USER_POOL_ID must be set in .env}"
 : "${COGNITO_APP_CLIENT_ID:?COGNITO_APP_CLIENT_ID must be set in .env}"
+: "${OPENAI_API_KEY:?OPENAI_API_KEY must be set in .env}"
 # ─────────────────────────────────────────────────────────────────────────
 
 REGION="us-east-1"
@@ -35,6 +38,7 @@ ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/LabRole"
 
 COGNITO_REGION="${COGNITO_REGION:-us-east-1}"
+GOOGLE_PLACES_API_KEY="${GOOGLE_PLACES_API_KEY:-}"
 WALLET_BUCKET="${WALLET_BUCKET:-traveleria-wallet-${ACCOUNT_ID}}"
 
 if ! aws s3api head-bucket --bucket "$WALLET_BUCKET" --region "$REGION" 2>/dev/null; then
@@ -44,7 +48,7 @@ if ! aws s3api head-bucket --bucket "$WALLET_BUCKET" --region "$REGION" 2>/dev/n
     echo ""
 fi
 
-ENV_JSON="{\"Variables\":{\"DATABASE_URL\":\"${DATABASE_URL}\",\"COGNITO_REGION\":\"${COGNITO_REGION}\",\"COGNITO_USER_POOL_ID\":\"${COGNITO_USER_POOL_ID}\",\"COGNITO_APP_CLIENT_ID\":\"${COGNITO_APP_CLIENT_ID}\",\"WALLET_BUCKET\":\"${WALLET_BUCKET}\"}}"
+ENV_JSON="{\"Variables\":{\"DATABASE_URL\":\"${DATABASE_URL}\",\"COGNITO_REGION\":\"${COGNITO_REGION}\",\"COGNITO_USER_POOL_ID\":\"${COGNITO_USER_POOL_ID}\",\"COGNITO_APP_CLIENT_ID\":\"${COGNITO_APP_CLIENT_ID}\",\"OPENAI_API_KEY\":\"${OPENAI_API_KEY}\",\"GOOGLE_PLACES_API_KEY\":\"${GOOGLE_PLACES_API_KEY}\",\"WALLET_BUCKET\":\"${WALLET_BUCKET}\"}}"
 
 LAMBDAS=(
     "health"
@@ -104,7 +108,7 @@ pip install --quiet --target ./deps \
     --platform manylinux2014_x86_64 \
     --python-version 3.11 \
     --only-binary=:all: \
-    "psycopg[binary]" "PyJWT[crypto]" python-dotenv typing_extensions
+    "psycopg[binary]" "PyJWT[crypto]" python-dotenv typing_extensions openai httpx
 
 # ── Step 2: Build one zip per Lambda ──────────────────────────────────────
 echo ""
@@ -225,6 +229,7 @@ add_method "$EVENT_ID" "PUT"    "traveleria-itinerary"
 add_method "$EVENT_ID" "DELETE" "traveleria-itinerary"
 add_method "$ME_ID"    "GET"    "traveleria-users"
 add_method "$ME_ID"    "PATCH"  "traveleria-users"
+add_method "$CHAT_ID"  "GET"    "traveleria-chat"
 add_method "$CHAT_ID"  "POST"   "traveleria-chat"
 add_method "$WALLET_ID" "GET"    "traveleria-wallet"
 add_method "$WALLET_ID" "POST"   "traveleria-wallet"
