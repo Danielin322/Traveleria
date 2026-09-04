@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { Tabs } from "expo-router";
+import { Tabs } from "expo-router/js-tabs";
 import { Platform, StyleSheet } from "react-native";
 
 import { HapticTab } from "../../components/haptic-tab";
