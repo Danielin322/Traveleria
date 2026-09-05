@@ -191,6 +191,7 @@ def _get_profile(current_user):
         )
         row = db.fetchone()
     return success({
+        "id": str(current_user["id"]),
         "email": current_user["email"], "full_name": row["full_name"],
         "country": row["country"], "language": row["language"],
         "age": row["age"], "interests": row["interests"] or [],

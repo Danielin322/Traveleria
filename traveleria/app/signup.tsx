@@ -5,14 +5,13 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
-  SafeAreaView,
   ScrollView,
-  StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 import { AppButton } from "../components/AppButton";
 import { FormField } from "../components/FormField";
@@ -402,9 +401,7 @@ const makeStyles = (colors: ThemeColors) =>
       alignItems: "center",
       paddingHorizontal: Spacing.md,
       paddingBottom: Spacing.sm,
-      // SafeAreaView only insets on iOS, so clear Android's status bar manually.
-      paddingTop:
-        Platform.OS === "android" ? (StatusBar.currentHeight ?? 0) + 8 : 8,
+      paddingTop: 8,
     },
     backButton: {
       flexDirection: "row",
