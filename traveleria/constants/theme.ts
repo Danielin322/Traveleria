@@ -29,6 +29,23 @@ const BRAND_DARK_MODE = "#6b9bff";
 const SHARED = "#6b4ee6";
 const SHARED_DARK_MODE = "#a78bfa";
 
+/**
+ * Teal is the assistant's colour, used only inside the chat view.
+ *
+ * The chat is the one screen where you are talking to something rather than
+ * editing something, and wearing the brand blue made it read as just another
+ * tab of the trip. Teal is what was left once the palette was accounted for:
+ * green, orange and red are statuses, blue is the brand, violet already means
+ * shared. It is a cool neighbour of the brand rather than a clash, so the two
+ * screens still look like one app.
+ *
+ * The light value is teal-700 rather than a brighter teal because white body
+ * text sits on it in the user's own message bubbles — at 5.5:1 it clears AA,
+ * where a lighter teal would land near 3:1.
+ */
+const ASSISTANT = "#0f766e";
+const ASSISTANT_DARK_MODE = "#2dd4bf";
+
 export const Colors = {
   light: {
     // Surfaces
@@ -58,6 +75,14 @@ export const Colors = {
     shared: SHARED,
     sharedSoft: "#f3f0fe",
     sharedContrast: "#ffffff",
+
+    // The assistant's accent, the ground the conversation sits on, and the
+    // text that goes on the accent. `assistantSoft` is a tinted `background`
+    // rather than a tinted `surface`: it is the floor of the chat, and the
+    // message bubbles are the cards standing on it.
+    assistant: ASSISTANT,
+    assistantSoft: "#eaf5f3",
+    assistantContrast: "#ffffff",
 
     // Lines & scrims
     border: "#e0e0e0",
@@ -103,6 +128,12 @@ export const Colors = {
     shared: SHARED_DARK_MODE,
     sharedSoft: "#241f36",
     sharedContrast: "#0f1316",
+
+    // #0e1a19 is `background` with the teal pushed just far enough to be felt
+    // and not far enough to glow — the same restraint as `sharedSoft` above.
+    assistant: ASSISTANT_DARK_MODE,
+    assistantSoft: "#0e1a19",
+    assistantContrast: "#0f1316",
 
     // Lines & scrims
     border: "#2d353d",

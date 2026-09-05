@@ -674,7 +674,9 @@ export default function TripDetailsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView
+      style={[styles.safeArea, viewMode === "chat" && styles.safeAreaChat]}
+    >
       {/* Disables the modal's swipe-down-to-dismiss only while chatting, so
           the sole way out of the chat is the "Back to Itinerary" button. */}
       <Stack.Screen options={{ gestureEnabled: viewMode !== "chat" }} />
@@ -683,26 +685,35 @@ export default function TripDetailsScreen() {
         style={styles.container}
         keyboardVerticalOffset={Platform.OS === "ios" ? 110 : 20}
       >
-        {/* Header */}
-        <View style={styles.header}>
+        {/* Header. Turns teal in the chat, so entering the assistant is a
+            visible change of place rather than a swapped list. */}
+        <View
+          style={[styles.header, viewMode === "chat" && styles.headerChat]}
+        >
           <Text style={styles.locationTag}>
             {location} • {date}
           </Text>
           <View style={styles.headerRow}>
             <Text style={styles.title}>{title}</Text>
-            <TouchableOpacity
-              style={styles.membersButton}
-              onPress={() => setMembersVisible(true)}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              accessibilityRole="button"
-              accessibilityLabel="Trip members"
-            >
-              <Ionicons
-                name="people-outline"
-                size={22}
-                color={colors.primaryContrast}
-              />
-            </TouchableOpacity>
+            {/* Itinerary only. The header is shared by both views, but members
+                are a property of the trip, not of the conversation, and the
+                sheet opening over the chat put a second way out of a screen
+                whose only exit is meant to be "Back to Itinerary". */}
+            {viewMode !== "chat" && (
+              <TouchableOpacity
+                style={styles.membersButton}
+                onPress={() => setMembersVisible(true)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityRole="button"
+                accessibilityLabel="Trip members"
+              >
+                <Ionicons
+                  name="people-outline"
+                  size={22}
+                  color={colors.primaryContrast}
+                />
+              </TouchableOpacity>
+            )}
           </View>
         </View>
 
@@ -1167,7 +1178,7 @@ export default function TripDetailsScreen() {
             )}
           </View>
         ) : (
-          <View style={{ flex: 1 }}>
+          <View style={styles.chatBody}>
             <TouchableOpacity
               style={styles.backButton}
               onPress={() => setViewMode("itinerary")}
@@ -1232,7 +1243,7 @@ export default function TripDetailsScreen() {
                       styles.typingBubble,
                     ]}
                   >
-                    <ActivityIndicator size="small" color={colors.primary} />
+                    <ActivityIndicator size="small" color={colors.assistant} />
                     <Text style={styles.typingText}>
                       Traveleria AI is typing…
                     </Text>
@@ -1283,12 +1294,15 @@ export default function TripDetailsScreen() {
 const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
     safeArea: { flex: 1, backgroundColor: colors.primary },
+    // Paints the notch and status-bar inset to match the header underneath it.
+    safeAreaChat: { backgroundColor: colors.assistant },
     container: { flex: 1, backgroundColor: colors.background },
     header: {
       padding: Spacing.xl,
       backgroundColor: colors.primary,
       paddingBottom: Spacing.xl,
     },
+    headerChat: { backgroundColor: colors.assistant },
     locationTag: {
       color: colors.primaryContrast,
       fontSize: FontSize.caption,
@@ -1577,6 +1591,10 @@ const makeStyles = (colors: ThemeColors) =>
       ...Elevation.lg,
     },
 
+    // The tinted floor of the conversation. Bubbles are cards on top of it,
+    // so the AI's white `surface` reads as raised instead of blending into a
+    // white page.
+    chatBody: { flex: 1, backgroundColor: colors.assistantSoft },
     backButton: {
       padding: Spacing.md,
       backgroundColor: colors.surface,
@@ -1584,7 +1602,7 @@ const makeStyles = (colors: ThemeColors) =>
       borderBottomColor: colors.border,
     },
     backText: {
-      color: colors.primary,
+      color: colors.assistant,
       fontFamily: FontFamily.semibold,
       fontSize: FontSize.small,
     },
@@ -1597,7 +1615,7 @@ const makeStyles = (colors: ThemeColors) =>
     },
     userBubble: {
       alignSelf: "flex-end",
-      backgroundColor: colors.primary,
+      backgroundColor: colors.assistant,
       borderBottomRightRadius: 2,
     },
     aiBubble: {
@@ -1607,7 +1625,7 @@ const makeStyles = (colors: ThemeColors) =>
       ...Elevation.sm,
     },
     messageText: { fontSize: FontSize.body, fontFamily: FontFamily.regular },
-    userText: { color: colors.primaryContrast },
+    userText: { color: colors.assistantContrast },
     aiText: { color: colors.textPrimary },
     typingBubble: {
       flexDirection: "row",
@@ -1649,13 +1667,13 @@ const makeStyles = (colors: ThemeColors) =>
       alignItems: "center",
     },
     sendButton: {
-      backgroundColor: colors.primary,
+      backgroundColor: colors.assistant,
       paddingVertical: Spacing.md,
       paddingHorizontal: Spacing.xl,
       borderRadius: Radius.xl,
     },
     sendButtonText: {
-      color: colors.primaryContrast,
+      color: colors.assistantContrast,
       fontFamily: FontFamily.semibold,
     },
     iconButton: {
