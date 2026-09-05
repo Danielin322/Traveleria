@@ -258,18 +258,30 @@ export default function HomeScreen() {
    * `role` is absent on responses from an API build that predates co-editing,
    * which reads as owned — the behaviour there is exactly what it was.
    */
-  const isSharedTrip = (trip: any) => trip.role === "editor";
-  const ownedTrips = useMemo(() => trips.filter((t) => !isSharedTrip(t)), [trips]);
-  const sharedCount = trips.length - ownedTrips.length;
+  /** Can you delete it, manage it, select it? Only the owner. */
+  const isOwnedTrip = (trip: any) => trip.role !== "editor";
+
+  /**
+   * Is more than one person on it? True on both sides — the owner needs to see
+   * that a trip is shared just as much as the person it was shared with, and
+   * from the owner's side the only evidence is the collaborator count.
+   * Counted from accepted invitations only, so a trip does not go violet on
+   * the strength of an invitation nobody has answered.
+   */
+  const isSharedTrip = (trip: any) =>
+    trip.role === "editor" || (trip.collaborators_count ?? 0) > 0;
+
+  const ownedTrips = useMemo(() => trips.filter(isOwnedTrip), [trips]);
+  const joinedCount = trips.length - ownedTrips.length;
 
   const enterSelection = (trip: any) => {
-    if (isSharedTrip(trip)) return;
+    if (!isOwnedTrip(trip)) return;
     setIsSelecting(true);
     setSelectedIds(new Set([trip.id]));
   };
 
   const toggleSelected = (trip: any) => {
-    if (isSharedTrip(trip)) return;
+    if (!isOwnedTrip(trip)) return;
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(trip.id)) next.delete(trip.id);
@@ -481,7 +493,17 @@ export default function HomeScreen() {
     const status = getTripStatus(item.date);
     const badge = formatTripBadge(status);
     const isShared = isSharedTrip(item);
-    const sharedBy = item.owner_name || item.owner_email;
+    const isOwned = isOwnedTrip(item);
+    // Two different facts, so two different sentences: whose trip you are
+    // looking at, or how many people you handed yours to.
+    const others = item.collaborators_count ?? 0;
+    const sharedLine = isOwned
+      ? others > 0
+        ? `Shared with ${others} ${others === 1 ? "person" : "people"}`
+        : null
+      : item.owner_name || item.owner_email
+        ? `Shared by ${item.owner_name || item.owner_email}`
+        : null;
     const isPast = status?.kind === "past";
 
     const isSelected = selectedIds.has(item.id);
@@ -558,8 +580,8 @@ export default function HomeScreen() {
           </View>
           <Text style={styles.tripTitle}>{item.title}</Text>
           <Text style={styles.dateText}>{formatTripDates(item.date)}</Text>
-          {isShared && sharedBy && (
-            <Text style={styles.sharedByText}>Shared by {sharedBy}</Text>
+          {sharedLine && (
+            <Text style={styles.sharedByText}>{sharedLine}</Text>
           )}
         </View>
 
@@ -568,7 +590,7 @@ export default function HomeScreen() {
              indicator rather than its own button. A shared trip shows nothing
              at all: an empty circle it will not fill in is worse than no
              circle. */
-          isShared ? null : (
+          !isOwned ? null : (
             <Ionicons
               name={isSelected ? "checkmark-circle" : "ellipse-outline"}
               size={24}
@@ -589,7 +611,7 @@ export default function HomeScreen() {
                 color={isShared ? colors.shared : colors.primary}
               />
             </TouchableOpacity>
-            {isShared ? (
+            {!isOwned ? (
               <TouchableOpacity
                 onPress={() => handleLeaveTrip(item)}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -640,11 +662,11 @@ export default function HomeScreen() {
 
           <View style={styles.selectionCenter}>
             <Text style={styles.selectionCount}>
-              {sharedCount > 0
+              {joinedCount > 0
                 ? `${selectedIds.size} of ${ownedTrips.length} selected`
                 : `${selectedIds.size} selected`}
             </Text>
-            {sharedCount > 0 && (
+            {joinedCount > 0 && (
               <Text style={styles.selectionHint}>
                 Shared trips can&apos;t be deleted
               </Text>

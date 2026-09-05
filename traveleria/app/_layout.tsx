@@ -52,10 +52,20 @@ function RootNavigator() {
       <StatusBar style={isDark ? "light" : "dark"} />
       <Stack screenOptions={{ headerShown: false }} key={scheme}>
         <Stack.Screen name="index" />
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        {/* Titled even though its own header is hidden: the title is what a
+            pushed screen shows on its back button, and without it iOS falls
+            back to the route name, "(tabs)". */}
+        <Stack.Screen
+          name="(tabs)"
+          options={{ headerShown: false, title: "Home" }}
+        />
         <Stack.Screen
           name="invitations"
-          options={{ headerShown: true, title: "Invitations" }}
+          options={{
+            headerShown: true,
+            title: "Invitations",
+            headerBackTitle: "Home",
+          }}
         />
         <Stack.Screen
           name="trip-details"
