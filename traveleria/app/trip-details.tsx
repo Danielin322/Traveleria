@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
-import { Stack, useLocalSearchParams } from "expo-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -22,6 +22,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { GooglePlacesAutocomplete } from "react-native-google-places-autocomplete";
 import MapView, { Marker } from "react-native-maps";
 import { TripDayTimePicker } from "../components/TripDayTimePicker";
+import { TripMembersSheet } from "../components/TripMembersSheet";
 import { DARK_MAP_STYLE } from "../constants/mapStyle";
 import {
   Elevation,
@@ -63,6 +64,7 @@ const renderMessageText = (text: string) =>
 
 export default function TripDetailsScreen() {
   const { id, title, location, date } = useLocalSearchParams();
+  const router = useRouter();
 
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -105,6 +107,7 @@ export default function TripDetailsScreen() {
   // Hides the chat list until it has already been scrolled to the latest
   // message, so opening the chat never shows the pre-scroll jump.
   const [isChatReady, setIsChatReady] = useState(false);
+  const [isMembersVisible, setMembersVisible] = useState(false);
 
   // Pings the chat Lambda as soon as the chat view opens, so its cold start
   // happens while the user is still reading/typing rather than on their
@@ -155,9 +158,28 @@ export default function TripDetailsScreen() {
     googlePlacesRef.current?.setAddressText("");
   };
 
-  const fetchItinerary = async () => {
+  /**
+   * A 404 on a trip that was on screen a moment ago means someone removed us
+   * from it, or deleted it. Both are the same to the API — it deliberately
+   * cannot tell "not yours" from "not there" — but either way the honest thing
+   * is to say so and go back, rather than show an empty itinerary or the
+   * generic connection error.
+   */
+  const handleAccessLost = useCallback(() => {
+    Alert.alert(
+      "Trip unavailable",
+      "This trip is no longer shared with you.",
+      [{ text: "OK", onPress: () => router.back() }],
+    );
+  }, [router]);
+
+  const fetchItinerary = useCallback(async () => {
     try {
       const response = await apiFetch(`/trips/${id}/itinerary`);
+      if (response.status === 404) {
+        handleAccessLost();
+        return;
+      }
       const data = await response.json();
       setItinerary(sortEvents(data));
     } catch (error) {
@@ -165,7 +187,7 @@ export default function TripDetailsScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [id, handleAccessLost]);
 
   const handleAddEvent = async () => {
     // Ignore repeat taps while the first request is still in flight.
@@ -414,10 +436,23 @@ export default function TripDetailsScreen() {
         body: JSON.stringify({ text: currentInput, trip_id: id }),
       });
 
+      if (response.status === 404) {
+        handleAccessLost();
+        return;
+      }
+
       const data = await response.json();
       setMessages((prev) => [
         ...prev,
-        { id: (Date.now() + 1).toString(), text: data.text, isUser: false },
+        {
+          id: (Date.now() + 1).toString(),
+          // A non-OK response still parses as JSON, and rendering `undefined`
+          // as the assistant's reply is worse than saying what went wrong.
+          text: response.ok
+            ? data.text
+            : data?.detail || "Something went wrong. Please try again.",
+          isUser: false,
+        },
       ]);
 
       if (data.added_items?.length) {
@@ -465,9 +500,14 @@ export default function TripDetailsScreen() {
     }
   };
 
-  useEffect(() => {
-    fetchItinerary();
-  }, []);
+  // On focus rather than on mount: the other person's edits arrive between one
+  // look at this screen and the next, and coming back from the members sheet
+  // or the map should show them.
+  useFocusEffect(
+    useCallback(() => {
+      fetchItinerary();
+    }, [fetchItinerary]),
+  );
 
   useEffect(() => {
     const fetchChatHistory = async () => {
@@ -556,6 +596,11 @@ export default function TripDetailsScreen() {
         <View style={styles.eventInfo}>
           <Text style={styles.eventActivity}>{item.place}</Text>
           <Text style={styles.eventPlace}>{item.address}</Text>
+          {/* Only on a co-editor's event. Your own needs no label, and events
+              from before authorship existed have nothing honest to show. */}
+          {item.added_by && !item.added_by_you && (
+            <Text style={styles.eventAuthor}>Added by {item.added_by}</Text>
+          )}
         </View>
 
         {isSelecting ? (
@@ -629,7 +674,9 @@ export default function TripDetailsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView
+      style={[styles.safeArea, viewMode === "chat" && styles.safeAreaChat]}
+    >
       {/* Disables the modal's swipe-down-to-dismiss only while chatting, so
           the sole way out of the chat is the "Back to Itinerary" button. */}
       <Stack.Screen options={{ gestureEnabled: viewMode !== "chat" }} />
@@ -638,12 +685,36 @@ export default function TripDetailsScreen() {
         style={styles.container}
         keyboardVerticalOffset={Platform.OS === "ios" ? 110 : 20}
       >
-        {/* Header */}
-        <View style={styles.header}>
+        {/* Header. Turns teal in the chat, so entering the assistant is a
+            visible change of place rather than a swapped list. */}
+        <View
+          style={[styles.header, viewMode === "chat" && styles.headerChat]}
+        >
           <Text style={styles.locationTag}>
             {location} • {date}
           </Text>
-          <Text style={styles.title}>{title}</Text>
+          <View style={styles.headerRow}>
+            <Text style={styles.title}>{title}</Text>
+            {/* Itinerary only. The header is shared by both views, but members
+                are a property of the trip, not of the conversation, and the
+                sheet opening over the chat put a second way out of a screen
+                whose only exit is meant to be "Back to Itinerary". */}
+            {viewMode !== "chat" && (
+              <TouchableOpacity
+                style={styles.membersButton}
+                onPress={() => setMembersVisible(true)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityRole="button"
+                accessibilityLabel="Trip members"
+              >
+                <Ionicons
+                  name="people-outline"
+                  size={22}
+                  color={colors.primaryContrast}
+                />
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
 
         {viewMode === "itinerary" ? (
@@ -1107,7 +1178,7 @@ export default function TripDetailsScreen() {
             )}
           </View>
         ) : (
-          <View style={{ flex: 1 }}>
+          <View style={styles.chatBody}>
             <TouchableOpacity
               style={styles.backButton}
               onPress={() => setViewMode("itinerary")}
@@ -1172,7 +1243,7 @@ export default function TripDetailsScreen() {
                       styles.typingBubble,
                     ]}
                   >
-                    <ActivityIndicator size="small" color={colors.primary} />
+                    <ActivityIndicator size="small" color={colors.assistant} />
                     <Text style={styles.typingText}>
                       Traveleria AI is typing…
                     </Text>
@@ -1207,6 +1278,15 @@ export default function TripDetailsScreen() {
           </View>
         )}
       </KeyboardAvoidingView>
+
+      <TripMembersSheet
+        visible={isMembersVisible}
+        onClose={() => setMembersVisible(false)}
+        tripId={String(id)}
+        tripTitle={String(title)}
+        onChanged={fetchItinerary}
+        onLeft={() => router.back()}
+      />
     </SafeAreaView>
   );
 }
@@ -1214,12 +1294,15 @@ export default function TripDetailsScreen() {
 const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
     safeArea: { flex: 1, backgroundColor: colors.primary },
+    // Paints the notch and status-bar inset to match the header underneath it.
+    safeAreaChat: { backgroundColor: colors.assistant },
     container: { flex: 1, backgroundColor: colors.background },
     header: {
       padding: Spacing.xl,
       backgroundColor: colors.primary,
       paddingBottom: Spacing.xl,
     },
+    headerChat: { backgroundColor: colors.assistant },
     locationTag: {
       color: colors.primaryContrast,
       fontSize: FontSize.caption,
@@ -1227,11 +1310,28 @@ const makeStyles = (colors: ThemeColors) =>
       opacity: 0.85,
       letterSpacing: 0.4,
     },
+    headerRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+    },
     title: {
       color: colors.primaryContrast,
       fontSize: FontSize.h2,
       fontFamily: FontFamily.bold,
       marginTop: Spacing.xs + 1,
+      flex: 1,
+      marginRight: Spacing.md,
+    },
+    membersButton: {
+      width: 38,
+      height: 38,
+      borderRadius: Radius.pill,
+      alignItems: "center",
+      justifyContent: "center",
+      // A translucent white disc, so the icon stays legible on the brand blue
+      // without introducing a second colour into the header.
+      backgroundColor: "rgba(255, 255, 255, 0.18)",
     },
 
     listPadding: { padding: Spacing.xl, paddingBottom: 100 },
@@ -1340,6 +1440,12 @@ const makeStyles = (colors: ThemeColors) =>
       alignItems: "center",
       ...Elevation.sm,
       overflow: "hidden",
+    },
+    eventAuthor: {
+      fontSize: FontSize.tiny,
+      fontFamily: FontFamily.regular,
+      color: colors.shared,
+      marginTop: 2,
     },
     eventCardSelected: {
       borderWidth: 2,
@@ -1485,6 +1591,10 @@ const makeStyles = (colors: ThemeColors) =>
       ...Elevation.lg,
     },
 
+    // The tinted floor of the conversation. Bubbles are cards on top of it,
+    // so the AI's white `surface` reads as raised instead of blending into a
+    // white page.
+    chatBody: { flex: 1, backgroundColor: colors.assistantSoft },
     backButton: {
       padding: Spacing.md,
       backgroundColor: colors.surface,
@@ -1492,7 +1602,7 @@ const makeStyles = (colors: ThemeColors) =>
       borderBottomColor: colors.border,
     },
     backText: {
-      color: colors.primary,
+      color: colors.assistant,
       fontFamily: FontFamily.semibold,
       fontSize: FontSize.small,
     },
@@ -1505,7 +1615,7 @@ const makeStyles = (colors: ThemeColors) =>
     },
     userBubble: {
       alignSelf: "flex-end",
-      backgroundColor: colors.primary,
+      backgroundColor: colors.assistant,
       borderBottomRightRadius: 2,
     },
     aiBubble: {
@@ -1515,7 +1625,7 @@ const makeStyles = (colors: ThemeColors) =>
       ...Elevation.sm,
     },
     messageText: { fontSize: FontSize.body, fontFamily: FontFamily.regular },
-    userText: { color: colors.primaryContrast },
+    userText: { color: colors.assistantContrast },
     aiText: { color: colors.textPrimary },
     typingBubble: {
       flexDirection: "row",
@@ -1557,13 +1667,13 @@ const makeStyles = (colors: ThemeColors) =>
       alignItems: "center",
     },
     sendButton: {
-      backgroundColor: colors.primary,
+      backgroundColor: colors.assistant,
       paddingVertical: Spacing.md,
       paddingHorizontal: Spacing.xl,
       borderRadius: Radius.xl,
     },
     sendButtonText: {
-      color: colors.primaryContrast,
+      color: colors.assistantContrast,
       fontFamily: FontFamily.semibold,
     },
     iconButton: {

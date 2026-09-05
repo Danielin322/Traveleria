@@ -16,6 +16,36 @@ const BRAND = "#2f6deb";
 /** Lighter blue for dark mode — BRAND is too dim against a dark surface. */
 const BRAND_DARK_MODE = "#6b9bff";
 
+/**
+ * Violet marks a trip that is shared with someone else.
+ *
+ * It has to be a colour of its own rather than a reuse. Green, orange and red
+ * already mean ongoing, warning and danger, and being shared is not a status.
+ * Blue is worse: `tripCardSelected` uses `primarySoft` as its background, and
+ * `surfaceAlt` happens to be that same #eef2ff in light mode, so any blue tint
+ * would make every shared card read as permanently selected. Violet is the
+ * nearest hue to the brand that is unmistakably not it.
+ */
+const SHARED = "#6b4ee6";
+const SHARED_DARK_MODE = "#a78bfa";
+
+/**
+ * Teal is the assistant's colour, used only inside the chat view.
+ *
+ * The chat is the one screen where you are talking to something rather than
+ * editing something, and wearing the brand blue made it read as just another
+ * tab of the trip. Teal is what was left once the palette was accounted for:
+ * green, orange and red are statuses, blue is the brand, violet already means
+ * shared. It is a cool neighbour of the brand rather than a clash, so the two
+ * screens still look like one app.
+ *
+ * The light value is teal-700 rather than a brighter teal because white body
+ * text sits on it in the user's own message bubbles — at 5.5:1 it clears AA,
+ * where a lighter teal would land near 3:1.
+ */
+const ASSISTANT = "#0f766e";
+const ASSISTANT_DARK_MODE = "#2dd4bf";
+
 export const Colors = {
   light: {
     // Surfaces
@@ -39,6 +69,20 @@ export const Colors = {
     success: "#1a9e5c",
     successSoft: "#e6f7ed",
     warning: "#ff9500",
+
+    // Co-edited trips: accent bar and chip, card tint, and the text that sits
+    // on the solid accent.
+    shared: SHARED,
+    sharedSoft: "#f3f0fe",
+    sharedContrast: "#ffffff",
+
+    // The assistant's accent, the ground the conversation sits on, and the
+    // text that goes on the accent. `assistantSoft` is a tinted `background`
+    // rather than a tinted `surface`: it is the floor of the chat, and the
+    // message bubbles are the cards standing on it.
+    assistant: ASSISTANT,
+    assistantSoft: "#eaf5f3",
+    assistantContrast: "#ffffff",
 
     // Lines & scrims
     border: "#e0e0e0",
@@ -77,6 +121,19 @@ export const Colors = {
     success: "#3ddc84",
     successSoft: "#12301f",
     warning: "#ffab2e",
+
+    // #241f36 sits just above `surface` in luminance, so the card reads as
+    // tinted without glowing. The accent bar carries the identity here, where
+    // the tint alone is deliberately subtle.
+    shared: SHARED_DARK_MODE,
+    sharedSoft: "#241f36",
+    sharedContrast: "#0f1316",
+
+    // #0e1a19 is `background` with the teal pushed just far enough to be felt
+    // and not far enough to glow — the same restraint as `sharedSoft` above.
+    assistant: ASSISTANT_DARK_MODE,
+    assistantSoft: "#0e1a19",
+    assistantContrast: "#0f1316",
 
     // Lines & scrims
     border: "#2d353d",

@@ -214,6 +214,11 @@ TRIPS_ID=$(make_resource "$ROOT_ID"  "trips")
 TRIP_ID=$(make_resource  "$TRIPS_ID" "{trip_id}")
 ITIN_ID=$(make_resource  "$TRIP_ID"  "itinerary")
 EVENT_ID=$(make_resource "$ITIN_ID"  "{event_id}")
+COLLABS_ID=$(make_resource "$TRIP_ID"    "collaborators")
+COLLAB_ID=$(make_resource  "$COLLABS_ID" "{collaborator_id}")
+OWNER_ID=$(make_resource   "$TRIP_ID"    "owner")
+INVITES_ID=$(make_resource "$ROOT_ID"    "invitations")
+INVITE_ID=$(make_resource  "$INVITES_ID" "{invitation_id}")
 USERS_ID=$(make_resource "$ROOT_ID"  "users")
 ME_ID=$(make_resource    "$USERS_ID" "me")
 CHAT_ID=$(make_resource  "$ROOT_ID"  "chat")
@@ -245,6 +250,12 @@ add_method "$ITIN_ID"  "GET"    "traveleria-itinerary"
 add_method "$ITIN_ID"  "POST"   "traveleria-itinerary"
 add_method "$EVENT_ID" "PUT"    "traveleria-itinerary"
 add_method "$EVENT_ID" "DELETE" "traveleria-itinerary"
+add_method "$COLLABS_ID" "GET"    "traveleria-trips"
+add_method "$COLLABS_ID" "POST"   "traveleria-trips"
+add_method "$COLLAB_ID"  "DELETE" "traveleria-trips"
+add_method "$OWNER_ID"   "PUT"    "traveleria-trips"
+add_method "$INVITES_ID" "GET"    "traveleria-trips"
+add_method "$INVITE_ID"  "PUT"    "traveleria-trips"
 add_method "$ME_ID"    "GET"    "traveleria-users"
 add_method "$ME_ID"    "PATCH"  "traveleria-users"
 add_method "$CHAT_ID"  "GET"    "traveleria-chat"

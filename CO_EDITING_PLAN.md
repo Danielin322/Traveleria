@@ -9,6 +9,9 @@ second writer on the itinerary, it has its own ownership checks, and its history
 is already per user. [§7](#7-the-assistant-on-a-shared-trip) is the section to
 read first if you have read the earlier draft.
 
+Every open question from the previous round is now answered; the answers are
+recorded under [Decisions on record](#decisions-on-record).
+
 ---
 
 ## What we are building
@@ -16,7 +19,8 @@ read first if you have read the earlier draft.
 The owner of a trip adds another user's **email** to that trip's co-editing
 list. That person sees an **invitation** they accept or decline. Once accepted:
 
-* the trip appears in their trip list, in a **Shared trips** section;
+* the trip appears in their trip list, sorted by date among their own trips
+  and marked as shared;
 * either of them can change the title, destination, dates, and events — by hand
   or through the assistant — and the other sees the change;
 * each of them keeps their **own** conversation with the assistant.
@@ -31,9 +35,9 @@ list. That person sees an **invitation** they accept or decline. Once accepted:
 | 2 | Access checks move from "owner" to "owner or collaborator" | `shared/utils.py` + **4 Lambdas** | **Medium — highest risk** |
 | 3 | Members API (list / add / remove / leave) + ownership transfer | `trips` Lambda, 4 routes | Medium |
 | 4 | Invitations screen (accept ✓ / decline ✕) | `trips` Lambda, 2 routes, new screen | Medium |
-| 5 | Members UI, Shared trips section, Leave instead of Delete | Frontend | Medium |
+| 5 | Shared-trip card styling, members UI, Leave instead of Delete | Frontend + `constants/theme.ts` | Medium |
 | 6 | Change propagation (refresh-on-focus) | Frontend | Small |
-| 7 | Assistant on a shared trip: access, attribution, safe removal | `chat` Lambda (+ optional migration) | Medium |
+| 7 | Assistant: access, `get_itinerary` tool, tool loop, safe removal | `chat` Lambda + migration | **Medium–Large** |
 
 Six new routes over five new API Gateway resources, all served by the existing
 `traveleria-trips` Lambda. `scripts/add_routes.sh` gains one block; it is
@@ -119,8 +123,8 @@ another person's edits, so §6 is "make the other two match", not "invent a
 refresh strategy".
 
 Note the import source: `@react-navigation/native` is **no longer a direct
-dependency** after the in-flight SDK 57 upgrade (see finding 8). `expo-router`
-is where `useFocusEffect` comes from.
+dependency** after the SDK 57 upgrade (finding 8). `expo-router` is where
+`useFocusEffect` comes from.
 
 ### 6. `CurrentUserContext` is a stub — and only the mock Social tab uses it
 
@@ -141,17 +145,13 @@ delete. A collaborator tapping it fires `DELETE /trips/{id}`, gets a 404, and
 sees "could not be removed" with no explanation. The card must offer **Leave**
 on a trip you do not own.
 
-### 8. An Expo SDK 54 → 57 upgrade is uncommitted on this branch
+### 8. The SDK 57 upgrade has landed, so this branch is clean
 
-`git status` shows modified `package.json`, `package-lock.json`, `app.json`,
-`_layout.tsx`, `(tabs)/_layout.tsx` (now importing `expo-router/js-tabs`),
-`haptic-tab.tsx`, `icon-symbol.tsx`, and both `use-color-scheme` hooks. React
-Native goes 0.81 → 0.86, TypeScript 5.9 → 6.0.
-
-Nothing in this plan depends on it, and nothing in it conflicts — the new files
-are one screen, one component, one service. But **land or revert the upgrade
-before starting**, so a co-editing bug is never being debugged through a
-half-applied SDK bump.
+`4e7aefd changed expo version to SDK57` is committed and the working tree is
+clean: React Native 0.86, TypeScript 6.0, `(tabs)/_layout.tsx` importing from
+`expo-router/js-tabs`. The previous draft asked for this to be settled before
+starting — it is. Nothing here conflicts with it; the new work is one screen,
+one component, one service and three theme tokens.
 
 ### 9. Smaller things, unchanged from the last audit
 
@@ -239,7 +239,7 @@ Acceptance is an explicit act.
   reappearing and lets the owner see "Declined" instead of silence. Re-inviting
   flips it back to `pending`.
 
-### Optional companion migration — event authorship
+### Companion migration — event authorship
 
 `011_day_places_created_by.sql`:
 
@@ -249,11 +249,15 @@ ALTER TABLE day_places
 ```
 
 Nullable, so every existing event stays valid and simply reads as "author
-unknown". It buys three things that are hard to get otherwise: an "added by Ben"
-line on an event, an assistant that can tell whose event it is about to delete
-([§7](#7-the-assistant-on-a-shared-trip)), and a way to answer "who put this
-here?" three weeks into planning. **Recommended, and separated so it can be cut**
-— see open question 1.
+unknown". It pays for three things: an "added by Ben" line on an event, an
+assistant that knows whose event it is about to delete
+([§7c](#c-dont-let-the-assistant-quietly-delete-someone-elses-event)), and an
+answer to "who put this here?" three weeks into planning.
+
+Both writers set it — `POST /trips/{id}/itinerary` and the assistant's
+`add_itinerary_item`. Nothing backfills it: events that predate the column keep
+NULL and render without an author, which is honest, because the information
+genuinely was not recorded.
 
 ---
 
@@ -514,37 +518,90 @@ empty almost always.
 * On accept, the trip goes straight into the home list from the response, with
   an **Open trip** action.
 
-### Entry point
+### Entry point — a bell in the Home header
 
-A banner above the trip list on Home, only when there is at least one pending
-invitation:
+A permanent bell in `titleRow`, left of the existing **Select** action
+([home.tsx:538](traveleria/app/(tabs)/home.tsx:538)), carrying a count badge
+when invitations are waiting:
 
 ```
-┌──────────────────────────────────────────┐
-│  ✉  2 trip invitations              ›    │
-└──────────────────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│  Your Journeys                  🔔②   Select │
+└──────────────────────────────────────────────┘
 ```
 
-No dead UI at zero, nothing competing with the header. Home fetches
-`/invitations` next to `/trips` on focus — it needs the count anyway, and it is
-one indexed query. (Alternative: a permanent bell with a badge. Same screen;
-open question 4.)
+* Always visible, so the route into invitations never moves or disappears.
+* The badge is a small pill in `colors.danger` with `primaryContrast` text,
+  rendered only above zero and capped at "9+".
+* Tapping with nothing pending still opens the screen, which says "No
+  invitations right now."
+* Home fetches `/invitations` beside `/trips` on focus — one indexed query, and
+  the count is what the badge needs anyway.
+* Selection mode replaces the header with `selectionBar`, so the bell goes with
+  it. That is correct: selection is a mode with its own actions.
 
-### Changed — Home
+### Changed — Home: shared trips inline, styled apart
 
-* Sections become **Upcoming / Shared trips / Past**. `groupTripsByTime` is
-  unchanged and simply runs on owned trips; shared trips form their own section,
-  soonest first. Each section renders only when non-empty, so a user with no
-  shared trips sees exactly today's screen.
-* A **Shared** chip beside the status badge, and a "Shared by ana@…" line, on
-  trips you do not own.
+**No separate section.** `groupTripsByTime` keeps running over the whole list,
+so a shared trip sorts into Upcoming or Past by its own dates exactly like a
+solo one and the `sections` memo is untouched. A trip you were invited to next
+month appears where next month is.
+
+What marks it out is the card:
+
+* A **Shared** chip in the top row beside the existing status badge, and a
+  "Shared by ana@…" line under the title.
+* A tinted card background plus a 4px accent bar down the leading edge, in a new
+  palette colour (below).
 * The trash icon becomes **exit-outline / Leave**
-  ([home.tsx:468](traveleria/app/(tabs)/home.tsx:468)) with its own confirmation.
-* Bulk selection excludes non-owned trips from **Select all**, and says why:
-  "3 of 5 selected — shared trips can't be deleted". Mixing delete and leave in
-  one bulk action is a good way to lose a trip by accident.
+  ([home.tsx:468](traveleria/app/(tabs)/home.tsx:468)), with its own confirmation
+  copy.
+* Bulk selection excludes non-owned trips from **Select all** and says why: "3 of
+  5 selected — shared trips can't be deleted". Mixing delete and leave into one
+  bulk action is a good way to lose a trip by accident.
 * `fetchTrips` moves to `useFocusEffect` from `expo-router`, matching
   `profile.tsx` and `wallet.tsx`.
+
+#### The colour
+
+Three new tokens in `constants/theme.ts`, added to **both** palettes — the file
+requires identical key sets, because `use-theme-color.ts` types its argument as
+the intersection of the two:
+
+| Token | Light | Dark | Used for |
+|---|---|---|---|
+| `shared` | `#6b4ee6` | `#a78bfa` | Accent bar, chip background, `locationText` on a shared card |
+| `sharedSoft` | `#f3f0fe` | `#241f36` | The card background |
+| `sharedContrast` | `#ffffff` | `#0f1316` | Chip text on the solid accent |
+
+Violet, and violet specifically, for three reasons:
+
+1. **Every other slot already carries meaning.** `success` green is the "Ongoing"
+   badge; `warning` orange and `danger` red both signal problems. Being shared is
+   not a status, so it must not borrow a status colour.
+2. **It cannot collide with selection.** `tripCardSelected` already uses
+   `primarySoft` (`#eef2ff`) as its background — and `surfaceAlt` is the *same*
+   `#eef2ff` in light mode. Any blue tint would make every shared card look
+   permanently selected. Violet is the closest hue to the brand blue that is
+   still unmistakably not it.
+3. **It survives dark mode.** `#241f36` sits just above `surface` (`#1a1f24`) in
+   luminance, so the tint reads without the card glowing, and the accent bar
+   carries the identity where the tint is subtle.
+
+Style order in `renderTripItem` matters enough to write down:
+
+```tsx
+style={[
+  styles.tripCard,
+  isShared && styles.tripCardShared,
+  isPast && styles.tripCardPast,
+  isSelected && styles.tripCardSelected,   // last, so selection always wins
+]}
+```
+
+One knock-on: `badge` uses `primarySoft`/`primary`, which sits oddly on a violet
+card. Simplest fix is for the status badge to switch to `surface`/`shared` when
+the card is shared, so the two chips read as a pair instead of blue-on-violet.
 
 ### New — members sheet (`components/TripMembersSheet.tsx`)
 
@@ -665,57 +722,114 @@ Two consequences worth deciding rather than discovering:
 
 ### c. Don't let the assistant quietly delete someone else's event
 
-This is finding 2, and it is the one place where sharing genuinely makes the
-assistant more dangerous. Today a single fuzzy `ILIKE` match is deleted with no
-confirmation.
+This is finding 2, and it is where sharing genuinely makes the assistant more
+dangerous. Today a single fuzzy `ILIKE` match is deleted outright, with no
+confirmation and no mention of whose event it was.
 
-The fix has two halves, and the second one needs the authorship column:
+Two halves, both resting on the authorship column:
 
 1. **Always name what was removed.** `_remove_itinerary_item` already returns a
-   result dict the model sees; extend it from `{"status": "removed", ...}` to
-   include the place, day and time, and instruct the model in the system prompt
-   to state them in its reply. Cheap, and it makes an unwanted deletion visible
-   immediately instead of three days later.
+   result dict the model sees; extend `{"status": "removed"}` to carry the
+   place, day and time, and instruct the model to state them in its reply. Cheap,
+   and it makes an unwanted deletion visible immediately rather than three days
+   later.
 
-2. **Confirm before removing an event you did not create.** With
-   `day_places.created_by_user_id`, the tool result becomes
-   `{"status": "needs_confirmation", "place": "…", "day": "…",
-   "created_by": "Ana"}` when the match belongs to someone else, and the prompt
-   instructs the model to ask — "That was added by Ana. Remove it anyway?" —
-   before calling again with `confirm: true`. Editors are equal, so the answer
-   can be yes; it just should not be silent.
+2. **Confirm before removing an event you did not create.** When the match's
+   `created_by_user_id` is someone else, the tool returns
+   `{"status": "needs_confirmation", "place": "…", "day": "…", "time": "…",
+   "created_by": "Ana"}` instead of deleting, and the prompt instructs the model
+   to ask — "That was added by Ana. Remove it anyway?" — and to call again with
+   `confirm: true` only once the user agrees. Editors are equal, so the answer
+   can be yes; it just must not be silent.
 
-   Without the column this is not implementable, which is the strongest argument
-   for taking the optional migration.
+**The confirmation question has to name the place in the assistant's visible
+text**, not only in the tool arguments. `_save_message` persists only the `user`
+and `assistant` text
+([chat/handler.py:355](traveleria-backend/lambdas/chat/handler.py:355)) and
+`_load_history` replays only those — tool calls and tool results are dropped
+between turns. So when the user answers "yes" on the next turn, the only surviving
+record of *what* was being confirmed is the sentence the assistant wrote. "Remove
+it anyway?" with the place named only inside the tool call would leave the model
+guessing.
 
 Both `_add_itinerary_item` and the manual `POST .../itinerary` set
 `created_by_user_id` to the acting user.
 
-### d. Let the assistant actually see the trip
+### d. Give the assistant a `get_itinerary` tool
 
-Finding 3: it currently cannot. On a shared trip that gap is worse — B's
-assistant would be blind to everything A planned, and would happily suggest a
-14:00 lunch on a day that already has one.
+Finding 3: the assistant cannot see the itinerary at all. That is equally true
+on solo trips, so this is fixed for **every** trip rather than only shared ones —
+an assistant that cannot see what you already planned is the same problem either
+way.
 
-The change is contained: load the itinerary in the same `with get_db()` block
-that already loads the trip, the profile and the history, and append a compact
-block to the system prompt:
+A tool rather than a block in the system prompt, so a trip's events cost input
+tokens only on the turns that actually need them:
 
+```python
+GET_ITINERARY_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_itinerary",
+        "description": (
+            "Read the trip's current itinerary: every planned event with its day, "
+            "time, place and who added it. Call this before answering questions "
+            "about what is planned, before suggesting a time so you do not clash "
+            "with something existing, and before removing an item."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "day": {
+                    "type": "string",
+                    "description": "Optional DD.MM.YYYY, to read one day instead of the whole trip",
+                },
+            },
+        },
+    },
+}
 ```
-The trip's current itinerary:
-Day 2 (13.06.2026): 09:00 Colosseum (added by Ana) · 13:00 Trattoria Vecchia (added by you)
-Day 3 (14.06.2026): nothing planned yet
+
+It returns one line per event, with empty days included so the model can see the
+gaps rather than infer them:
+
+```json
+{"days": [
+  {"date": "13.06.2026", "events": [
+    {"time": "09:00", "place": "Colosseum", "added_by": "Ana"},
+    {"time": "13:00", "place": "Trattoria Vecchia", "added_by": "you"}]},
+  {"date": "14.06.2026", "events": []}
+]}
 ```
 
-Attribution in that block is what lets the assistant say "Ana already has the
-Colosseum at 09:00 that day" instead of proposing it again. It also costs input
-tokens on every message; on `gpt-4.1-nano` with a typical trip that is small,
-but it is a real cost and the reason this is called out separately rather than
-assumed.
+`added_by` is `"you"` for the caller's own events and the other person's name
+(or their email, when no name is set) otherwise. On a trip with no
+collaborators the field is omitted entirely — no point spending tokens on
+attribution nobody needs.
 
-This is strictly speaking beyond co-editing — the gap exists on solo trips too —
-but it is the difference between an assistant that participates in a shared plan
-and one that talks past it. See open question 2.
+The handler reuses the itinerary Lambda's query shape, with the access predicate
+and a join to `users` for the author.
+
+#### This needs the tool loop to actually be a loop
+
+`_run_conversation` is single-shot today: one completion, and if it produced
+tool calls, exactly one follow-up — and that follow-up is made **without**
+`tools` ([chat/handler.py:270](traveleria-backend/lambdas/chat/handler.py:270)).
+The model cannot act on what a tool returned.
+
+That is fine for write-only tools, where the call *is* the action. It does not
+work for a read tool: the natural sequence is `get_itinerary` → look →
+`add_itinerary_item`, and today the second step is impossible.
+
+So `_run_conversation` becomes a bounded loop — pass `tools=TOOLS` every round,
+execute whatever comes back, append the results, go again until the model
+returns prose or a **cap of three rounds** is reached. The cap is not decoration:
+it is the only thing between a confused model and an unbounded run of OpenAI
+calls inside a Lambda holding a database connection open. On hitting it, return
+the last prose the model produced, or a plain "I could not finish that — can you
+rephrase?" if there is none.
+
+This is the largest single change in §7, and the reason its effort estimate
+moved up.
 
 ### e. Tell it the trip is shared
 
@@ -731,20 +845,23 @@ events." It stops the assistant claiming sole authorship of the plan and makes
 | File | Change |
 |---|---|
 | `traveleria-backend/sql/010_trip_collaborators.sql` | **new** — table + indexes |
-| `traveleria-backend/sql/011_day_places_created_by.sql` | **new**, optional — event authorship |
+| `traveleria-backend/sql/011_day_places_created_by.sql` | **new** — event authorship |
 | `traveleria-backend/shared/utils.py` | `get_trip_access` / `require_trip_access`; `owner_user_id` → `user_id` in the three trip-day helpers |
 | `traveleria-backend/shared/auth.py` | claim unclaimed invites on sign-in |
 | `traveleria-backend/lambdas/trips/handler.py` | list query, access checks, collaborators, transfer, invitations |
 | `traveleria-backend/lambdas/itinerary/handler.py` | access predicate ×3; set `created_by_user_id` |
-| `traveleria-backend/lambdas/chat/handler.py` | access checks ×3, removal confirmation, itinerary in the prompt, shared-trip line |
+| `traveleria-backend/lambdas/chat/handler.py` | access checks ×3, `get_itinerary` tool, bounded tool loop, removal confirmation, shared-trip line |
 | `traveleria-backend/lambdas/users/handler.py` | `trips_count` includes shared trips |
-| `traveleria-backend/scripts/add_routes.sh` | five resources, six methods |
+| `traveleria-backend/scripts/add_routes.sh` | five resources, six methods — patches the running lab |
+| `traveleria-backend/deploy_cloudshell.sh` | the same five resources and six methods — keeps the from-scratch rebuild complete |
+| `traveleria-backend/scripts/deploy_function.sh` | **new** — per-function deploy, generalised from `deploy_wallet.sh` |
 | `traveleria-backend/local_server.py` | the same six routes, or local dev diverges |
 | `traveleria/app/invitations.tsx` | **new** |
 | `traveleria/components/TripMembersSheet.tsx` | **new** |
 | `traveleria/services/tripSharingService.ts` | **new** |
 | `traveleria/utils/validation.ts` | shared `validateEmail` |
-| `traveleria/app/(tabs)/home.tsx` | invitations banner, Shared trips section, chip, leave vs delete, bulk rule, focus refetch |
+| `traveleria/constants/theme.ts` | `shared` / `sharedSoft` / `sharedContrast` in both palettes |
+| `traveleria/app/(tabs)/home.tsx` | invitations bell + badge, Shared chip and card styling, leave vs delete, bulk rule, focus refetch |
 | `traveleria/app/trip-details.tsx` | members button and sheet, avatars, authorship line, 404 copy, focus refetch |
 
 Untouched: the whole wallet path, `social.tsx`, `CurrentUserContext.tsx`, and
@@ -754,30 +871,70 @@ the chat *UI* in `trip-details.tsx`.
 
 ## Deployment
 
+There are two deployment paths and this feature has to land in **both**.
+
+### Routine — shipping this change to the running lab
+
 1. `python scripts/init_db.py` — additive, safe any time, safe to re-run.
 2. Redeploy **`traveleria-trips`**, **`traveleria-itinerary`**, **`traveleria-chat`**
    and **`traveleria-users`**. All four bundle `shared/`, and both `shared/utils.py`
-   and `shared/auth.py` change, so all four must go out together.
+   and `shared/auth.py` change, so all four go out together.
 3. `bash scripts/add_routes.sh` for the six new routes.
 
-**There is no safe deploy script for these four functions.** `deploy_wallet.sh`
-covers only the wallet; `deploy_cloudshell.sh` covers everything but deletes and
-recreates the REST API, which mints a new invoke URL and breaks
-`EXPO_PUBLIC_API_URL` in every installed build. Redeploying `traveleria-chat` is
-also no longer trivial: its zip needs `openai` and `httpx`, and its environment
-needs `OPENAI_API_KEY` and `GOOGLE_PLACES_API_KEY` on top of the database and
-Cognito variables.
+There is no safe per-function script for those four today. `deploy_wallet.sh`
+covers only the wallet, and `deploy_cloudshell.sh` cannot be used for a code
+change because it deletes and recreates the REST API, minting a new invoke URL
+and breaking `EXPO_PUBLIC_API_URL` in every installed build. Redeploying
+`traveleria-chat` by hand is no longer trivial either: its zip needs `openai`
+and `httpx`, and its environment needs `OPENAI_API_KEY` and
+`GOOGLE_PLACES_API_KEY` on top of the database and Cognito variables.
 
-So this plan includes **`scripts/deploy_function.sh <name>`**, generalised from
+So this plan adds **`scripts/deploy_function.sh <name>`**, generalised from
 `deploy_wallet.sh`: build the zip from `lambdas/<name>/handler.py` plus
 `shared/` plus `deps`, `update-function-code`, and merge — never replace — the
-environment map, copying from the function's own existing configuration. Same
-rules as its ancestor: creates and updates only, never touches API Gateway,
-never echoes an environment block.
+environment map, read from the function's own existing configuration. Same rules
+as its ancestor: creates and updates only, never touches API Gateway, never
+echoes an environment block.
 
 Order: migration first (the new tables are ones the old code never reads, so the
 running Lambdas keep working), then the four functions, then the routes. Rolling
 back is redeploying the previous zips; the tables can stay.
+
+### From scratch — `deploy_cloudshell.sh` must stay current
+
+`deploy_cloudshell.sh` is the one script that stands the whole backend up from
+nothing, and it exists for a specific day: **moving to a different AWS lab
+account.** On that day it has to be complete — every Lambda, every environment
+variable, every API Gateway resource and method, every pip dependency — because
+there is nothing else to fall back on.
+
+It is never run for a routine change, and that is exactly how it rots: nobody
+runs it, so nobody notices when it has fallen behind. Treat it as a deliverable
+of this feature, not an afterthought. Co-editing must add to it:
+
+| What | Where in the script |
+|---|---|
+| `/trips/{trip_id}/collaborators` + `/{collaborator_id}` resources and their 3 methods | the `make_resource` / `add_method` block |
+| `/trips/{trip_id}/owner` resource and `PUT` | same |
+| `/invitations` + `/{invitation_id}` resources and their 2 methods | same |
+| No new Lambda, no new environment variable, no new pip dependency | — |
+
+Every route added here therefore lands in **three** places: `add_routes.sh` (to
+patch the running lab), `deploy_cloudshell.sh` (to rebuild a new one), and
+`local_server.py` (so local dev matches). A route missing from any one of them
+is a bug that only shows up much later, in the place it is most expensive.
+
+The same rule applies beyond co-editing: whenever a feature adds a function, a
+route, an environment variable, a bucket, or a dependency, it goes into
+`deploy_cloudshell.sh` in the same change. Worth a line in `CLAUDE.md` so it is
+not carried by memory alone.
+
+**A gap worth closing while we are here:** `deploy_cloudshell.sh` creates the
+API Gateway resources from scratch, but `add_routes.sh` has drifted ahead of it
+before — `add_routes.sh` exists precisely because routes were missing from the
+deployed API. A short verification pass, comparing the resource list the two
+scripts produce, is cheap now and expensive to skip. It belongs with the
+co-editing routes rather than as a separate task.
 
 ---
 
@@ -812,8 +969,10 @@ Two accounts, A (owner) and B.
   it on next focus.
 - A opens the chat on the same trip → sees **only** their own conversation; none
   of B's messages appear, in the history load or in the model's context.
-- B asks "what's planned for day 2?" → the assistant lists A's events too
-  (requires §7d).
+- B asks "what's planned for day 2?" → the assistant calls `get_itinerary`
+  and lists A's events too (requires §7d).
+- B asks the assistant to add something and it needs the plan first → read then
+  write inside one message, without hitting the three-round cap.
 - B asks to remove an event **A** created → the assistant says whose it is and
   asks before deleting (requires §7c and the authorship column).
 - B is removed from the trip, then sends a chat message → clean "no longer
@@ -852,46 +1011,42 @@ Two accounts, A (owner) and B.
 | Email enumeration through the invite endpoint | Both outcomes are a success; no path distinguishes registered from not |
 | Itinerary in the prompt raising per-message token cost | Compact one-line-per-event format; measure on a full trip before shipping |
 | Redeploying four Lambdas by hand goes wrong | `scripts/deploy_function.sh`, modelled on the wallet script, merging rather than replacing the environment |
-| The SDK 57 upgrade and this feature landing together | Finding 8: land or revert the upgrade first |
+| The tool loop spending OpenAI calls without bound | Hard cap of three rounds per message, with a defined answer on hitting it |
+| A shared card reading as "selected" | Violet rather than any blue tint; selection styles applied last |
+| `deploy_cloudshell.sh` silently falling behind, so a move to a new lab rebuilds a backend missing half the routes | Every route lands in all three of `add_routes.sh`, `deploy_cloudshell.sh` and `local_server.py`, in the same change; a verification pass against the current API is part of this work |
 
 ---
 
-## Settled previously — not re-opened
+## Decisions on record
 
-1. Invitations are accepted or declined, not auto-joined.
-2. Only the owner invites and removes.
-3. Shared trips get their own Home section.
-4. The wallet is not involved.
-5. The assistant may see the whole shared trip (§7d makes it true in code).
-6. Ownership transfer is in scope.
-7. No push or email notifications; the banner is the whole surface.
+Settled across two design reviews. Not re-opened without a reason.
 
-## Open questions
+1. **Invitations are accepted or declined**, never auto-joined.
+2. **Only the owner invites and removes.** One line to relax later.
+3. **Shared trips are not a separate section.** They sort by date alongside
+   everything else, marked by a Shared chip and a violet card ([§5](#5-frontend)).
+4. **The entry point is a permanent bell with a badge** in the Home header.
+5. **Event authorship is in scope** — `day_places.created_by_user_id`.
+6. **The assistant reads the itinerary through a `get_itinerary` tool**, on
+   every trip, shared or not, so those tokens are spent only when needed.
+7. **A collaborator's chat history is kept** when they leave or are removed —
+   unreadable while they have no access, restored if they are re-invited.
+8. **The wallet is not involved.**
+9. **Ownership transfer is in scope.**
+10. **No push or email notifications.** The bell is the whole surface.
+11. **Account deletion is out of scope** — no such endpoint exists, so there is
+    nothing to reconcile.
+12. **`deploy_cloudshell.sh` is a maintained deliverable**, not dead weight. It
+    is the one-script path to standing the backend up in a new AWS lab, so every
+    feature keeps it current even though nothing routine ever runs it.
 
-1. **Take the authorship column (`day_places.created_by_user_id`)?** It is one
-   nullable column, and it is what makes "added by Ben" and the assistant's
-   confirm-before-deleting-someone-else's-event possible. **Recommended.**
-   Without it, §7c degrades to "always say what you deleted" with no
-   confirmation step.
+## Still open
 
-2. **Feed the current itinerary into the assistant's prompt?** It does not
-   happen today (finding 3), so your "the assistant sees all trip details"
-   decision is not yet true in code. **Recommended**, with the caveat that it
-   adds input tokens to every message. If you would rather keep the assistant
-   cheap, the fallback is a `get_itinerary` tool it calls only when it needs to
-   — one more round trip when used, nothing when not.
+Nothing blocking. Two judgement calls worth revisiting once the code exists:
 
-3. **Delete a collaborator's chat history when they leave or are removed?**
-   Planned: keep it, inaccessible, restored if re-invited. The alternative is
-   deleting on removal.
-
-4. **Invitations entry point:** banner-when-non-zero (planned) or a permanent
-   bell with a badge in the Home header.
-
-5. **Section order on Home:** Upcoming / Shared trips / Past (planned), or
-   Shared first.
-
-6. **Owner account deletion.** No account-deletion endpoint exists, so nothing
-   is broken today. Whenever one is added, note that `ON DELETE CASCADE` on
-   `trips.owner_user_id` would delete shared trips out from under their
-   collaborators; auto-transfer to the longest-standing editor would be kinder.
+* **The exact violet.** `#6b4ee6` / `#a78bfa` is a proposal, not a measurement.
+  Worth eyeballing on a real device in both themes, next to a solo card and an
+  Ongoing badge, before it hardens into a token.
+* **The three-round cap on the tool loop** ([§7d](#d-give-the-assistant-a-get_itinerary-tool)).
+  Three covers read → write → summarise. If real conversations need four, that
+  is a constant, not a redesign.

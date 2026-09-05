@@ -43,6 +43,23 @@ function validateText(value: string, rule: TextRule): string | null {
   return null;
 }
 
+/**
+ * Deliberately permissive — the same shape the signup screen has always used,
+ * and the same one the backend checks. Whether an address really exists is
+ * settled by whether its owner ever signs in with it, not by a regex.
+ */
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export const isValidEmail = (email: string) => EMAIL_PATTERN.test(email.trim());
+
+export const validateEmail = (value: string) => {
+  const email = value.trim();
+  if (!email) return "Enter an email address.";
+  if (!isValidEmail(email))
+    return "Enter a valid email address, e.g. name@example.com.";
+  return null;
+};
+
 export const validateTripTitle = (value: string) =>
   validateText(value, { ...LIMITS.tripTitle, label: "Trip title" });
 

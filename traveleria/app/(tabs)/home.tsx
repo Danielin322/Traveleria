@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -31,6 +31,11 @@ import {
 import { useThemeColors } from "../../contexts/ThemeContext";
 import { apiFetch } from "../../services/apiClient";
 import {
+  listInvitations,
+  listMembers,
+  removeMember,
+} from "../../services/tripSharingService";
+import {
   formatTripBadge,
   formatTripDates,
   getTripStatus,
@@ -53,6 +58,9 @@ type TripFieldErrors = {
 
 export default function HomeScreen() {
   const [trips, setTrips] = useState<any[]>([]);
+  // Drives the badge on the bell. Kept as a count rather than the list itself:
+  // the Invitations screen fetches its own copy when it opens.
+  const [invitationCount, setInvitationCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -85,7 +93,7 @@ export default function HomeScreen() {
     ];
   }, [trips]);
 
-  const fetchTrips = async () => {
+  const fetchTrips = useCallback(async () => {
     if (!API_URL) {
       setError(
         "API URL is not configured. Please set EXPO_PUBLIC_API_URL in your .env file.",
@@ -106,12 +114,26 @@ export default function HomeScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  /**
+   * Best-effort: the bell is a shortcut to a screen the user can always reach,
+   * so a failure here costs the badge and nothing else. It must not be able to
+   * take the trip list down with it.
+   */
+  const fetchInvitationCount = useCallback(async () => {
+    try {
+      const invitations = await listInvitations();
+      setInvitationCount(invitations.length);
+    } catch {
+      setInvitationCount(0);
+    }
+  }, []);
 
   /** Pull-to-refresh: reuses fetchTrips but drives the spinner in the list. */
   const handleRefresh = async () => {
     setRefreshing(true);
-    await fetchTrips();
+    await Promise.all([fetchTrips(), fetchInvitationCount()]);
     setRefreshing(false);
   };
 
@@ -226,23 +248,53 @@ export default function HomeScreen() {
     setSelectedIds(new Set());
   };
 
-  const enterSelection = (tripId: string) => {
+  /**
+   * Selection exists to delete trips, and a trip shared with you cannot be
+   * deleted — only left, which is a different act with a different warning.
+   * So selection covers owned trips only, and the bar says why the numbers do
+   * not match the list. Mixing delete and leave into one bulk action is a good
+   * way to lose a trip by accident.
+   *
+   * `role` is absent on responses from an API build that predates co-editing,
+   * which reads as owned — the behaviour there is exactly what it was.
+   */
+  /** Can you delete it, manage it, select it? Only the owner. */
+  const isOwnedTrip = (trip: any) => trip.role !== "editor";
+
+  /**
+   * Is more than one person on it? True on both sides — the owner needs to see
+   * that a trip is shared just as much as the person it was shared with, and
+   * from the owner's side the only evidence is the collaborator count.
+   * Counted from accepted invitations only, so a trip does not go violet on
+   * the strength of an invitation nobody has answered.
+   */
+  const isSharedTrip = (trip: any) =>
+    trip.role === "editor" || (trip.collaborators_count ?? 0) > 0;
+
+  const ownedTrips = useMemo(() => trips.filter(isOwnedTrip), [trips]);
+  const joinedCount = trips.length - ownedTrips.length;
+
+  const enterSelection = (trip: any) => {
+    if (!isOwnedTrip(trip)) return;
     setIsSelecting(true);
-    setSelectedIds(new Set([tripId]));
+    setSelectedIds(new Set([trip.id]));
   };
 
-  const toggleSelected = (tripId: string) =>
+  const toggleSelected = (trip: any) => {
+    if (!isOwnedTrip(trip)) return;
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(tripId)) next.delete(tripId);
-      else next.add(tripId);
+      if (next.has(trip.id)) next.delete(trip.id);
+      else next.add(trip.id);
       return next;
     });
+  };
 
-  const allSelected = trips.length > 0 && selectedIds.size === trips.length;
+  const allSelected =
+    ownedTrips.length > 0 && selectedIds.size === ownedTrips.length;
 
   const toggleSelectAll = () =>
-    setSelectedIds(allSelected ? new Set() : new Set(trips.map((t) => t.id)));
+    setSelectedIds(allSelected ? new Set() : new Set(ownedTrips.map((t) => t.id)));
 
   /**
    * Deletes the given ids and returns the failures, each with the server's
@@ -304,11 +356,19 @@ export default function HomeScreen() {
    */
   const handleDeleteTrip = (trip: any) => {
     const n = trip.events_count ?? 0;
+    const others = trip.collaborators_count ?? 0;
+    // Deleting a shared trip takes it away from everyone on it, and the
+    // cascade removes each person's own chat history for it. That is a bigger
+    // thing than deleting a solo trip and should not be discovered afterwards.
+    const sharedWarning =
+      others > 0
+        ? ` It will also disappear for ${others === 1 ? "the other person" : `the ${others} other people`} on it, along with everyone's chat history for it.`
+        : "";
     Alert.alert(
       `Delete “${trip.title}”?`,
-      n > 0
+      (n > 0
         ? `Its ${n} ${n === 1 ? "event" : "events"} will be deleted too. This cannot be undone.`
-        : "This cannot be undone.",
+        : "This cannot be undone.") + sharedWarning,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -323,6 +383,44 @@ export default function HomeScreen() {
             } catch (err) {
               console.error("Error deleting trip:", err);
               Alert.alert("Connection problem", "Could not reach the server.");
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  /**
+   * Leaving is the collaborator's version of deleting: it removes their own
+   * membership and nothing else. The membership id rides along on the trip
+   * list; the lookup is a fallback for an API build that does not send it yet.
+   */
+  const handleLeaveTrip = (trip: any) => {
+    Alert.alert(
+      `Leave “${trip.title}”?`,
+      "It will disappear from your trips, and you will need a new invitation to get back in. Nothing is deleted for anyone else.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Leave",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              let membershipId = trip.membership_id;
+              if (!membershipId) {
+                const members = await listMembers(trip.id);
+                membershipId = members.collaborators.find((m) => m.is_you)?.id;
+                if (!membershipId) {
+                  throw new Error("You are not listed on this trip.");
+                }
+              }
+              await removeMember(trip.id, membershipId);
+              setTrips((prev) => prev.filter((t) => t.id !== trip.id));
+            } catch (err: any) {
+              Alert.alert(
+                "Could not leave",
+                err?.message || "Could not reach the server.",
+              );
             }
           },
         },
@@ -381,13 +479,31 @@ export default function HomeScreen() {
     );
   };
 
-  useEffect(() => {
-    fetchTrips();
-  }, []);
+  // On focus rather than on mount: a co-editor's changes arrive between one
+  // look at this screen and the next, and profile.tsx and wallet.tsx already
+  // work this way.
+  useFocusEffect(
+    useCallback(() => {
+      fetchTrips();
+      fetchInvitationCount();
+    }, [fetchTrips, fetchInvitationCount]),
+  );
 
   const renderTripItem = ({ item }: { item: any }) => {
     const status = getTripStatus(item.date);
     const badge = formatTripBadge(status);
+    const isShared = isSharedTrip(item);
+    const isOwned = isOwnedTrip(item);
+    // Two different facts, so two different sentences: whose trip you are
+    // looking at, or how many people you handed yours to.
+    const others = item.collaborators_count ?? 0;
+    const sharedLine = isOwned
+      ? others > 0
+        ? `Shared with ${others} ${others === 1 ? "person" : "people"}`
+        : null
+      : item.owner_name || item.owner_email
+        ? `Shared by ${item.owner_name || item.owner_email}`
+        : null;
     const isPast = status?.kind === "past";
 
     const isSelected = selectedIds.has(item.id);
@@ -396,14 +512,17 @@ export default function HomeScreen() {
       <TouchableOpacity
         style={[
           styles.tripCard,
+          isShared && styles.tripCardShared,
           isPast && styles.tripCardPast,
+          // Last, so a selected shared trip still reads as selected.
           isSelected && styles.tripCardSelected,
         ]}
         onPress={() => {
           // While selecting, the card toggles instead of navigating —
-          // opening a trip mid-selection would lose the ticks.
+          // opening a trip mid-selection would lose the ticks. A shared trip
+          // cannot be selected, so it stays inert rather than pretending.
           if (isSelecting) {
-            toggleSelected(item.id);
+            toggleSelected(item);
             return;
           }
           router.push({
@@ -416,25 +535,42 @@ export default function HomeScreen() {
             },
           });
         }}
-        onLongPress={() => enterSelection(item.id)}
+        onLongPress={() => enterSelection(item)}
         delayLongPress={300}
         accessibilityRole={isSelecting ? "checkbox" : "button"}
         accessibilityState={isSelecting ? { checked: isSelected } : undefined}
       >
         <View style={styles.tripInfo}>
           <View style={styles.tripCardTopRow}>
-            <Text style={styles.locationText}>{item.location}</Text>
+            <Text
+              style={[styles.locationText, isShared && styles.locationTextShared]}
+            >
+              {item.location}
+            </Text>
+            {isShared && (
+              <View style={styles.sharedChip}>
+                <Text style={styles.sharedChipText}>SHARED</Text>
+              </View>
+            )}
             {badge && (
               <View
                 style={[
                   styles.badge,
                   status?.kind === "ongoing" && styles.badgeOngoing,
+                  // The default badge is blue on white. On a violet card that
+                  // reads as two unrelated colours, so it borrows the card's.
+                  isShared &&
+                    status?.kind !== "ongoing" &&
+                    styles.badgeOnShared,
                 ]}
               >
                 <Text
                   style={[
                     styles.badgeText,
                     status?.kind === "ongoing" && styles.badgeTextOngoing,
+                    isShared &&
+                      status?.kind !== "ongoing" &&
+                      styles.badgeTextOnShared,
                   ]}
                 >
                   {badge}
@@ -444,16 +580,23 @@ export default function HomeScreen() {
           </View>
           <Text style={styles.tripTitle}>{item.title}</Text>
           <Text style={styles.dateText}>{formatTripDates(item.date)}</Text>
+          {sharedLine && (
+            <Text style={styles.sharedByText}>{sharedLine}</Text>
+          )}
         </View>
 
         {isSelecting ? (
           /* Tapping the card is what toggles selection, so this is an
-             indicator rather than its own button. */
-          <Ionicons
-            name={isSelected ? "checkmark-circle" : "ellipse-outline"}
-            size={24}
-            color={isSelected ? colors.primary : colors.textDisabled}
-          />
+             indicator rather than its own button. A shared trip shows nothing
+             at all: an empty circle it will not fill in is worse than no
+             circle. */
+          !isOwned ? null : (
+            <Ionicons
+              name={isSelected ? "checkmark-circle" : "ellipse-outline"}
+              size={24}
+              color={isSelected ? colors.primary : colors.textDisabled}
+            />
+          )
         ) : (
           <View style={styles.tripActions}>
             <TouchableOpacity
@@ -462,17 +605,36 @@ export default function HomeScreen() {
               accessibilityRole="button"
               accessibilityLabel={`Edit ${item.title}`}
             >
-              <Ionicons name="pencil-outline" size={19} color={colors.primary} />
+              <Ionicons
+                name="pencil-outline"
+                size={19}
+                color={isShared ? colors.shared : colors.primary}
+              />
             </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => handleDeleteTrip(item)}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              accessibilityRole="button"
-              accessibilityLabel={`Delete ${item.title}`}
-            >
-              <Ionicons name="trash-outline" size={19} color={colors.danger} />
-            </TouchableOpacity>
-            <Ionicons name="chevron-forward" size={20} color={colors.primary} />
+            {!isOwned ? (
+              <TouchableOpacity
+                onPress={() => handleLeaveTrip(item)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityRole="button"
+                accessibilityLabel={`Leave ${item.title}`}
+              >
+                <Ionicons name="exit-outline" size={19} color={colors.danger} />
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                onPress={() => handleDeleteTrip(item)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityRole="button"
+                accessibilityLabel={`Delete ${item.title}`}
+              >
+                <Ionicons name="trash-outline" size={19} color={colors.danger} />
+              </TouchableOpacity>
+            )}
+            <Ionicons
+              name="chevron-forward"
+              size={20}
+              color={isShared ? colors.shared : colors.primary}
+            />
           </View>
         )}
       </TouchableOpacity>
@@ -498,14 +660,23 @@ export default function HomeScreen() {
             <Text style={styles.selectionAction}>Cancel</Text>
           </TouchableOpacity>
 
-          <Text style={styles.selectionCount}>
-            {selectedIds.size} selected
-          </Text>
+          <View style={styles.selectionCenter}>
+            <Text style={styles.selectionCount}>
+              {joinedCount > 0
+                ? `${selectedIds.size} of ${ownedTrips.length} selected`
+                : `${selectedIds.size} selected`}
+            </Text>
+            {joinedCount > 0 && (
+              <Text style={styles.selectionHint}>
+                Shared trips can&apos;t be deleted
+              </Text>
+            )}
+          </View>
 
           <View style={styles.selectionRight}>
             <TouchableOpacity
               onPress={toggleSelectAll}
-              disabled={isBulkDeleting || trips.length === 0}
+              disabled={isBulkDeleting || ownedTrips.length === 0}
               accessibilityRole="button"
             >
               <Text style={styles.selectionAction}>
@@ -537,16 +708,44 @@ export default function HomeScreen() {
         <>
           <View style={styles.titleRow}>
             <Text style={styles.title}>Your Journeys</Text>
-            {/* Only offered when there is something to select. */}
-            {trips.length > 0 && (
+            <View style={styles.titleRowActions}>
+              {/* Permanent, so the way into invitations never moves. The badge
+                  is the only part that comes and goes. */}
               <TouchableOpacity
-                onPress={() => setIsSelecting(true)}
+                onPress={() => router.push("/invitations")}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 accessibilityRole="button"
-                accessibilityLabel="Select trips to delete"
+                accessibilityLabel={
+                  invitationCount > 0
+                    ? `Invitations, ${invitationCount} waiting`
+                    : "Invitations"
+                }
               >
-                <Text style={styles.selectionAction}>Select</Text>
+                <Ionicons
+                  name="notifications-outline"
+                  size={23}
+                  color={colors.textSecondary}
+                />
+                {invitationCount > 0 && (
+                  <View style={styles.bellBadge}>
+                    <Text style={styles.bellBadgeText}>
+                      {invitationCount > 9 ? "9+" : invitationCount}
+                    </Text>
+                  </View>
+                )}
               </TouchableOpacity>
-            )}
+
+              {/* Only offered when there is something to select. */}
+              {ownedTrips.length > 0 && (
+                <TouchableOpacity
+                  onPress={() => setIsSelecting(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Select trips to delete"
+                >
+                  <Text style={styles.selectionAction}>Select</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
           <Text style={styles.subtitle}>
             Plan, organize, and share your adventures.
@@ -752,6 +951,16 @@ const makeStyles = (colors: ThemeColors) =>
       alignItems: "center",
       ...Elevation.sm,
     },
+    // A trip someone shared with you. Violet rather than any blue: the
+    // selected state below already owns primarySoft, and surfaceAlt is that
+    // same #eef2ff in light mode, so a blue tint would make every shared card
+    // look permanently selected. The accent bar carries the identity in dark
+    // mode, where the tint is deliberately subtle.
+    tripCardShared: {
+      backgroundColor: colors.sharedSoft,
+      borderLeftWidth: 4,
+      borderLeftColor: colors.shared,
+    },
     // Past trips recede so upcoming ones read as the active content.
     tripCardPast: { opacity: 0.65 },
     tripCardSelected: {
@@ -770,6 +979,29 @@ const makeStyles = (colors: ThemeColors) =>
       alignItems: "center",
       justifyContent: "space-between",
     },
+    titleRowActions: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: Spacing.lg,
+    },
+    bellBadge: {
+      position: "absolute",
+      top: -6,
+      right: -8,
+      minWidth: 18,
+      height: 18,
+      paddingHorizontal: 4,
+      borderRadius: Radius.pill,
+      backgroundColor: colors.danger,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    bellBadgeText: {
+      fontSize: 10,
+      lineHeight: 13,
+      fontFamily: FontFamily.bold,
+      color: colors.primaryContrast,
+    },
     // Occupies the space the heading, subtitle and Plan Trip button leave
     // behind, so entering selection does not shift the list under the finger.
     selectionBar: {
@@ -785,10 +1017,17 @@ const makeStyles = (colors: ThemeColors) =>
       alignItems: "center",
       gap: Spacing.lg,
     },
+    selectionCenter: { alignItems: "center" },
     selectionCount: {
       fontSize: FontSize.body,
       fontFamily: FontFamily.semibold,
       color: colors.textPrimary,
+    },
+    selectionHint: {
+      fontSize: FontSize.tiny,
+      fontFamily: FontFamily.regular,
+      color: colors.textMuted,
+      marginTop: 2,
     },
     selectionAction: {
       fontSize: FontSize.small,
@@ -832,6 +1071,28 @@ const makeStyles = (colors: ThemeColors) =>
     },
     badgeOngoing: { backgroundColor: colors.successSoft },
     badgeTextOngoing: { color: colors.success },
+    badgeOnShared: { backgroundColor: colors.surface },
+    badgeTextOnShared: { color: colors.shared },
+    locationTextShared: { color: colors.shared },
+    sharedChip: {
+      backgroundColor: colors.shared,
+      paddingHorizontal: Spacing.sm,
+      paddingVertical: 3,
+      borderRadius: Radius.sm,
+      marginLeft: Spacing.sm,
+    },
+    sharedChipText: {
+      fontSize: FontSize.tiny,
+      fontFamily: FontFamily.bold,
+      color: colors.sharedContrast,
+      letterSpacing: 0.4,
+    },
+    sharedByText: {
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.regular,
+      color: colors.textMuted,
+      marginTop: 2,
+    },
     sectionHeader: {
       fontSize: FontSize.caption,
       fontFamily: FontFamily.bold,
