@@ -24,7 +24,13 @@ from botocore.config import Config
 from shared.auth import get_current_user
 from shared.database import get_db
 from shared.response import error, success
-from shared.utils import AppError, format_trip_date, parse_body, parse_uuid
+from shared.utils import (
+    AppError,
+    format_trip_date,
+    parse_body,
+    parse_uuid,
+    require_trip_access,
+)
 
 BUCKET = os.getenv("WALLET_BUCKET", "")
 
@@ -337,14 +343,11 @@ def _create_post(event, current_user):
 
     with get_db() as db:
         if shared_trip_uuid:
-            # Only your own trip can be shared -- this is not the co-editing
-            # feature, so there is no "editor of someone else's trip" case.
-            db.execute(
-                "SELECT id FROM trips WHERE id = %s AND owner_user_id = %s",
-                (shared_trip_uuid, current_user["id"]),
-            )
-            if not db.fetchone():
-                raise AppError("Trip not found", status=404)
+            # Owner or active editor -- the same access a co-editor already
+            # has to the trip itself, via the same predicate GET /trips uses,
+            # so anyone who can already see the trip in their own list can
+            # share it.
+            require_trip_access(db, shared_trip_uuid, current_user["id"])
 
         db.execute(
             """
