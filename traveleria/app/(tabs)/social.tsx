@@ -556,158 +556,169 @@ export default function SocialScreen() {
         }
       />
 
-      {/* ---------- Composer Modal ---------- */}
-      <Modal visible={composerOpen} animationType="slide" transparent>
+      {/* ---------- Composer Modal (also hosts the trip picker as a second view, never a second stacked Modal) ---------- */}
+      <Modal
+        visible={composerOpen}
+        animationType="slide"
+        transparent
+        onRequestClose={() => {
+          if (tripPickerOpen) {
+            setTripPickerOpen(false);
+          } else {
+            setComposerOpen(false);
+            setDraftText("");
+            setDraftImage(undefined);
+            setDraftTrip(undefined);
+          }
+        }}
+      >
         <KeyboardAvoidingView
           behavior={Platform.OS === "ios" ? "padding" : undefined}
           style={styles.modalOverlay}
         >
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>New Post</Text>
-            <TextInput
-              style={styles.composerInput}
-              placeholder="Share an experience..."
-              placeholderTextColor={colors.textDisabled}
-              value={draftText}
-              onChangeText={setDraftText}
-              multiline
-            />
-            {draftImage && (
-              <View style={styles.draftImageWrap}>
-                <Image
-                  source={{ uri: draftImage.uri }}
-                  style={styles.draftImage}
-                />
-                <TouchableOpacity
-                  style={styles.removeImgBtn}
-                  onPress={() => setDraftImage(undefined)}
-                >
-                  <Ionicons name="close" size={18} color="#fff" />
-                </TouchableOpacity>
-              </View>
-            )}
-            {draftTrip && (
-              <View style={styles.draftTripChip}>
-                <Ionicons name="airplane" size={18} color={colors.primary} />
-                <View style={{ flex: 1, marginLeft: 8 }}>
-                  <Text style={styles.draftTripTitle}>{draftTrip.title}</Text>
-                  <Text style={styles.draftTripDate}>
-                    {formatTripDates(draftTrip.date)}
-                  </Text>
+            {tripPickerOpen ? (
+              <>
+                <View style={styles.commentsHeader}>
+                  <TouchableOpacity
+                    onPress={() => setTripPickerOpen(false)}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <Ionicons name="chevron-back" size={24} color={colors.primary} />
+                  </TouchableOpacity>
+                  <Text style={styles.modalTitle}>Select a Trip</Text>
+                  <View style={{ width: 24 }} />
                 </View>
-                <TouchableOpacity onPress={() => setDraftTrip(undefined)}>
-                  <Ionicons name="close" size={18} color={colors.textMuted} />
-                </TouchableOpacity>
-              </View>
-            )}
+                {loadingMyTrips ? (
+                  <ActivityIndicator
+                    size="large"
+                    color={colors.primary}
+                    style={{ marginVertical: 30 }}
+                  />
+                ) : (
+                  <ScrollView style={{ minHeight: 200, maxHeight: 340 }}>
+                    {myTrips.length === 0 && (
+                      <Text style={styles.emptyText}>
+                        You don't have any trips yet.
+                      </Text>
+                    )}
+                    {myTrips.map((trip) => (
+                      <TouchableOpacity
+                        key={trip.id}
+                        style={styles.tripPickerRow}
+                        onPress={() => selectTripToShare(trip)}
+                      >
+                        <Ionicons
+                          name="airplane-outline"
+                          size={20}
+                          color={colors.primary}
+                        />
+                        <View style={{ flex: 1, marginLeft: 12 }}>
+                          <Text style={styles.tripCardTitle}>{trip.title}</Text>
+                          <Text style={styles.tripCardMeta}>
+                            {formatTripDates(trip.date)}
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                )}
+              </>
+            ) : (
+              <>
+                <Text style={styles.modalTitle}>New Post</Text>
+                <TextInput
+                  style={styles.composerInput}
+                  placeholder="Share an experience..."
+                  placeholderTextColor={colors.textDisabled}
+                  value={draftText}
+                  onChangeText={setDraftText}
+                  multiline
+                />
+                {draftImage && (
+                  <View style={styles.draftImageWrap}>
+                    <Image
+                      source={{ uri: draftImage.uri }}
+                      style={styles.draftImage}
+                    />
+                    <TouchableOpacity
+                      style={styles.removeImgBtn}
+                      onPress={() => setDraftImage(undefined)}
+                    >
+                      <Ionicons name="close" size={18} color="#fff" />
+                    </TouchableOpacity>
+                  </View>
+                )}
+                {draftTrip && (
+                  <View style={styles.draftTripChip}>
+                    <Ionicons name="airplane" size={18} color={colors.primary} />
+                    <View style={{ flex: 1, marginLeft: 8 }}>
+                      <Text style={styles.draftTripTitle}>{draftTrip.title}</Text>
+                      <Text style={styles.draftTripDate}>
+                        {formatTripDates(draftTrip.date)}
+                      </Text>
+                    </View>
+                    <TouchableOpacity onPress={() => setDraftTrip(undefined)}>
+                      <Ionicons name="close" size={18} color={colors.textMuted} />
+                    </TouchableOpacity>
+                  </View>
+                )}
 
-            <View style={styles.composerActions}>
-              <TouchableOpacity
-                style={styles.iconBtn}
-                onPress={() => pickImage(false)}
-              >
-                <Ionicons name="image-outline" size={22} color={colors.primary} />
-                <Text style={styles.iconBtnText}>Gallery</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.iconBtn}
-                onPress={() => pickImage(true)}
-              >
-                <Ionicons name="camera-outline" size={22} color={colors.primary} />
-                <Text style={styles.iconBtnText}>Camera</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.iconBtn} onPress={openTripPicker}>
-                <Ionicons name="airplane-outline" size={22} color={colors.primary} />
-                <Text style={styles.iconBtnText}>Trip</Text>
-              </TouchableOpacity>
-            </View>
+                <View style={styles.composerActions}>
+                  <TouchableOpacity
+                    style={styles.iconBtn}
+                    onPress={() => pickImage(false)}
+                  >
+                    <Ionicons name="image-outline" size={22} color={colors.primary} />
+                    <Text style={styles.iconBtnText}>Gallery</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.iconBtn}
+                    onPress={() => pickImage(true)}
+                  >
+                    <Ionicons name="camera-outline" size={22} color={colors.primary} />
+                    <Text style={styles.iconBtnText}>Camera</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.iconBtn} onPress={openTripPicker}>
+                    <Ionicons name="airplane-outline" size={22} color={colors.primary} />
+                    <Text style={styles.iconBtnText}>Trip</Text>
+                  </TouchableOpacity>
+                </View>
 
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => {
-                  setComposerOpen(false);
-                  setDraftText("");
-                  setDraftImage(undefined);
-                  setDraftTrip(undefined);
-                }}
-                disabled={posting}
-              >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.modalButton,
-                  styles.saveButton,
-                  posting && { opacity: 0.6 },
-                ]}
-                onPress={submitPost}
-                disabled={posting}
-              >
+                <View style={styles.modalButtons}>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.cancelButton]}
+                    onPress={() => {
+                      setComposerOpen(false);
+                      setDraftText("");
+                      setDraftImage(undefined);
+                      setDraftTrip(undefined);
+                      setTripPickerOpen(false);
+                    }}
+                    disabled={posting}
+                  >
+                    <Text style={styles.cancelButtonText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.modalButton,
+                      styles.saveButton,
+                      posting && { opacity: 0.6 },
+                    ]}
+                    onPress={submitPost}
+                    disabled={posting}
+                  >
                 {posting ? (
                   <ActivityIndicator size="small" color={colors.surface} />
                 ) : (
                   <Text style={styles.saveButtonText}>Post</Text>
                 )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
-      {/* ---------- Trip Picker Modal ---------- */}
-      <Modal
-        visible={tripPickerOpen}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setTripPickerOpen(false)}
-      >
-        <View style={styles.commentsOverlay}>
-          <View
-            style={[styles.commentsSheet, { paddingBottom: 24 + insets.bottom }]}
-          >
-            <View style={styles.commentsHeader}>
-              <Text style={styles.modalTitle}>Share a Trip</Text>
-              <TouchableOpacity onPress={() => setTripPickerOpen(false)}>
-                <Ionicons name="close" size={26} color={colors.danger} />
-              </TouchableOpacity>
-            </View>
-            {loadingMyTrips ? (
-              <ActivityIndicator
-                size="large"
-                color={colors.primary}
-                style={{ marginTop: 30 }}
-              />
-            ) : (
-              <ScrollView style={{ flex: 1 }}>
-                {myTrips.length === 0 && (
-                  <Text style={styles.emptyText}>
-                    You don't have any trips yet.
-                  </Text>
-                )}
-                {myTrips.map((trip) => (
-                  <TouchableOpacity
-                    key={trip.id}
-                    style={styles.tripPickerRow}
-                    onPress={() => selectTripToShare(trip)}
-                  >
-                    <Ionicons
-                      name="airplane-outline"
-                      size={20}
-                      color={colors.primary}
-                    />
-                    <View style={{ flex: 1, marginLeft: 12 }}>
-                      <Text style={styles.tripCardTitle}>{trip.title}</Text>
-                      <Text style={styles.tripCardMeta}>
-                        {formatTripDates(trip.date)}
-                      </Text>
-                    </View>
                   </TouchableOpacity>
-                ))}
-              </ScrollView>
+                </View>
+              </>
             )}
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* ---------- Edit Post Modal ---------- */}
