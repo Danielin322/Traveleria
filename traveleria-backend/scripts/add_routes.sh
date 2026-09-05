@@ -109,6 +109,44 @@ else
 fi
 
 echo ""
+echo "Social feed:"
+if aws lambda get-function --function-name traveleria-social --region "$REGION" >/dev/null 2>&1; then
+    SOCIAL_ID=$(ensure_resource "/" "social")
+    POSTS_ID=$(ensure_resource "/social" "posts")
+    POST_ID=$(ensure_resource "/social/posts" "{post_id}")
+    LIKE_ID=$(ensure_resource "/social/posts/{post_id}" "like")
+    POST_COMMENTS_ID=$(ensure_resource "/social/posts/{post_id}" "comments")
+    COMMENTS_ID=$(ensure_resource "/social" "comments")
+    COMMENT_ID=$(ensure_resource "/social/comments" "{comment_id}")
+    PEOPLE_ID=$(ensure_resource "/social" "people")
+    USERS_ID=$(ensure_resource "/social" "users")
+    SOCIAL_USER_ID=$(ensure_resource "/social/users" "{user_id}")
+    FOLLOW_ID=$(ensure_resource "/social/users/{user_id}" "follow")
+    USER_POSTS_ID=$(ensure_resource "/social/users/{user_id}" "posts")
+    SHARED_TRIPS_ID=$(ensure_resource "/social" "shared-trips")
+    SHARED_TRIP_ID=$(ensure_resource "/social/shared-trips" "{trip_id}")
+    SHARED_TRIP_COPY_ID=$(ensure_resource "/social/shared-trips/{trip_id}" "copy")
+    ensure_method "$POSTS_ID"         "GET"    "traveleria-social" "/social/posts"
+    ensure_method "$POSTS_ID"         "POST"   "traveleria-social" "/social/posts"
+    ensure_method "$POST_ID"          "PUT"    "traveleria-social" "/social/posts/{post_id}"
+    ensure_method "$POST_ID"          "DELETE" "traveleria-social" "/social/posts/{post_id}"
+    ensure_method "$LIKE_ID"          "POST"   "traveleria-social" "/social/posts/{post_id}/like"
+    ensure_method "$LIKE_ID"          "DELETE" "traveleria-social" "/social/posts/{post_id}/like"
+    ensure_method "$POST_COMMENTS_ID" "POST"   "traveleria-social" "/social/posts/{post_id}/comments"
+    ensure_method "$COMMENT_ID"       "DELETE" "traveleria-social" "/social/comments/{comment_id}"
+    ensure_method "$PEOPLE_ID"        "GET"    "traveleria-social" "/social/people"
+    ensure_method "$SOCIAL_USER_ID"   "GET"    "traveleria-social" "/social/users/{user_id}"
+    ensure_method "$FOLLOW_ID"        "POST"   "traveleria-social" "/social/users/{user_id}/follow"
+    ensure_method "$FOLLOW_ID"        "DELETE" "traveleria-social" "/social/users/{user_id}/follow"
+    ensure_method "$USER_POSTS_ID"    "GET"    "traveleria-social" "/social/users/{user_id}/posts"
+    ensure_method "$SHARED_TRIP_ID"      "GET"  "traveleria-social" "/social/shared-trips/{trip_id}"
+    ensure_method "$SHARED_TRIP_COPY_ID" "POST" "traveleria-social" "/social/shared-trips/{trip_id}/copy"
+else
+    echo "  ! traveleria-social does not exist yet — skipping."
+    echo "    Create it first (bash scripts/deploy_social.sh), then re-run this script."
+fi
+
+echo ""
 echo "Redeploying stage '${STAGE}'..."
 aws apigateway create-deployment --rest-api-id "$API_ID" \
     --stage-name "$STAGE" --region "$REGION" >/dev/null

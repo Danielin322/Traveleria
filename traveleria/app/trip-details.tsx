@@ -10,7 +10,6 @@ import {
   Linking,
   Modal,
   Platform,
-  SafeAreaView,
   SectionList,
   StyleSheet,
   Text,
@@ -19,6 +18,7 @@ import {
   TouchableWithoutFeedback,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { GooglePlacesAutocomplete } from "react-native-google-places-autocomplete";
 import MapView, { Marker } from "react-native-maps";
 import { TripDayTimePicker } from "../components/TripDayTimePicker";

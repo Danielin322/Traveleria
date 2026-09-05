@@ -1,13 +1,16 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
-import { useMemo, useState } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useMemo, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   FlatList,
   Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -17,11 +20,21 @@ import {
 } from "react-native";
 import {
   Comment,
-  INITIAL_POSTS,
   Post,
   Reply,
   SocialUser,
-} from "../../constants/socialMockData";
+  addComment,
+  createPost,
+  deleteComment as deleteCommentApi,
+  deletePost as deletePostApi,
+  editPostText,
+  likePost,
+  listPosts,
+  unlikePost,
+} from "../../services/socialService";
+import { apiFetch } from "../../services/apiClient";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { formatTripDates } from "../../utils/tripFormat";
 import {
   Elevation,
   FontFamily,
@@ -30,10 +43,6 @@ import {
   Spacing,
   ThemeColors,
 } from "../../constants/theme";
-import {
-  CURRENT_USER_ID,
-  useCurrentUser,
-} from "../../contexts/CurrentUserContext";
 import { useThemeColors } from "../../contexts/ThemeContext";
 
 function timeAgo(iso: string): string {
@@ -48,32 +57,53 @@ function timeAgo(iso: string): string {
   return new Date(iso).toLocaleDateString();
 }
 
-function uid(prefix: string) {
-  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-}
+type DraftImage = { uri: string; mimeType: string; size?: number };
+type MyTrip = { id: string; title: string; location: string; date: string };
+type DraftTrip = { id: string; title: string; date: string };
 
 export default function SocialScreen() {
+  const router = useRouter();
   const colors = useThemeColors();
   const styles = useMemo(() => makeStyles(colors), [colors]);
+  const insets = useSafeAreaInsets();
 
-  const currentUser = useCurrentUser();
-  const me: SocialUser = {
-    id: CURRENT_USER_ID,
-    name: currentUser.name,
-    avatar: currentUser.avatar,
-  };
+  const goToProfile = (userId: string) =>
+    router.push({ pathname: "/user-profile", params: { id: userId } });
 
-  // Resolve a stored user reference against the live current-user info,
-  // so name/avatar updates in profile reflect everywhere immediately.
-  const displayUser = (u: SocialUser): SocialUser =>
-    u.id === CURRENT_USER_ID ? me : u;
+  // A photo icon rather than a random stock photo for "no avatar set" -- a
+  // real-looking placeholder photo reads as someone else's actual picture,
+  // which is exactly the confusion it caused.
+  const renderAvatar = (uri: string | null, avatarStyle: object, iconSize: number) =>
+    uri ? (
+      <Image source={{ uri }} style={avatarStyle} />
+    ) : (
+      <View style={[avatarStyle, styles.avatarPlaceholder]}>
+        <Ionicons name="person" size={iconSize} color={colors.textMuted} />
+      </View>
+    );
 
-  const [posts, setPosts] = useState<Post[]>(INITIAL_POSTS);
+  const [posts, setPosts] = useState<Post[]>([]);
+  const [myId, setMyId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [posting, setPosting] = useState(false);
 
   // Create-post modal
   const [composerOpen, setComposerOpen] = useState(false);
   const [draftText, setDraftText] = useState("");
-  const [draftImage, setDraftImage] = useState<string | undefined>(undefined);
+  const [draftImage, setDraftImage] = useState<DraftImage | undefined>(undefined);
+  const [draftTrip, setDraftTrip] = useState<DraftTrip | undefined>(undefined);
+
+  // Trip picker, opened from the composer's "Trip" button
+  const [tripPickerOpen, setTripPickerOpen] = useState(false);
+  const [myTrips, setMyTrips] = useState<MyTrip[]>([]);
+  const [loadingMyTrips, setLoadingMyTrips] = useState(false);
+
+  // Edit-post modal (text only — images are immutable)
+  const [editingPost, setEditingPost] = useState<Post | null>(null);
+  const [editText, setEditText] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
 
   // Likes modal
   const [likesModalUsers, setLikesModalUsers] = useState<SocialUser[] | null>(
@@ -83,18 +113,79 @@ export default function SocialScreen() {
   // Image preview modal
   const [previewImage, setPreviewImage] = useState<string | null>(null);
 
-  // Comments modal
+  // Comments modal. replyTarget.commentId is whatever comment or reply is
+  // being replied to directly — the backend has no depth limit, so this
+  // works the same whether it points at a top-level comment or a reply.
   const [commentsPostId, setCommentsPostId] = useState<string | null>(null);
   const [commentDraft, setCommentDraft] = useState("");
   const [replyTarget, setReplyTarget] = useState<{
     commentId: string;
     userName: string;
   } | null>(null);
+  // Replies are collapsed by default; this tracks which top-level comments
+  // have been expanded to show theirs.
+  const [expandedComments, setExpandedComments] = useState<Set<string>>(
+    new Set()
+  );
+  const toggleExpanded = (commentId: string) => {
+    setExpandedComments((prev) => {
+      const next = new Set(prev);
+      if (next.has(commentId)) {
+        next.delete(commentId);
+      } else {
+        next.add(commentId);
+      }
+      return next;
+    });
+  };
 
   const activePost = useMemo(
     () => posts.find((p) => p.id === commentsPostId) ?? null,
     [posts, commentsPostId]
   );
+
+  // ---------- Data loading ----------
+  const fetchMyId = useCallback(async () => {
+    try {
+      const response = await apiFetch("/users/me");
+      if (response.ok) {
+        const data = await response.json();
+        setMyId(data.id ?? null);
+      }
+    } catch {
+      // Non-fatal: "is this mine" checks just won't match until this loads.
+    }
+  }, []);
+
+  const refreshPosts = useCallback(async () => {
+    const feed = await listPosts();
+    setPosts(feed);
+  }, []);
+
+  const loadAll = useCallback(async () => {
+    try {
+      setError(null);
+      await Promise.all([fetchMyId(), refreshPosts()]);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Could not load the social feed."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchMyId, refreshPosts]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadAll();
+    }, [loadAll])
+  );
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await loadAll();
+    setRefreshing(false);
+  };
 
   // ---------- Posts ----------
   const pickImage = async (fromCamera: boolean) => {
@@ -111,155 +202,168 @@ export default function SocialScreen() {
           mediaTypes: ImagePicker.MediaTypeOptions.Images,
           quality: 0.7,
         });
-    if (!result.canceled && result.assets?.[0]?.uri) {
-      setDraftImage(result.assets[0].uri);
+    const asset = !result.canceled ? result.assets?.[0] : undefined;
+    if (asset?.uri) {
+      setDraftTrip(undefined);
+      setDraftImage({
+        uri: asset.uri,
+        mimeType: asset.mimeType || "image/jpeg",
+        size: asset.fileSize,
+      });
     }
   };
 
-  const submitPost = () => {
-    if (!draftText.trim() && !draftImage) {
-      Alert.alert("Empty post", "Add some text or a photo first.");
+  const openTripPicker = async () => {
+    setTripPickerOpen(true);
+    setLoadingMyTrips(true);
+    try {
+      const response = await apiFetch("/trips");
+      setMyTrips(await response.json());
+    } catch {
+      setMyTrips([]);
+    } finally {
+      setLoadingMyTrips(false);
+    }
+  };
+
+  const selectTripToShare = (trip: MyTrip) => {
+    setDraftImage(undefined);
+    setDraftTrip({ id: trip.id, title: trip.title, date: trip.date });
+    setTripPickerOpen(false);
+  };
+
+  const submitPost = async () => {
+    if (!draftText.trim() && !draftImage && !draftTrip) {
+      Alert.alert("Empty post", "Add some text, a photo, or a trip first.");
       return;
     }
-    const newPost: Post = {
-      id: uid("p"),
-      user: me,
-      text: draftText.trim() || undefined,
-      imageUri: draftImage,
-      createdAt: new Date().toISOString(),
-      likes: [],
-      comments: [],
-    };
-    setPosts((prev) => [newPost, ...prev]);
-    setDraftText("");
-    setDraftImage(undefined);
-    setComposerOpen(false);
+    setPosting(true);
+    try {
+      await createPost({
+        text: draftText.trim() || undefined,
+        image: draftImage,
+        sharedTripId: draftTrip?.id,
+      });
+      setDraftText("");
+      setDraftImage(undefined);
+      setDraftTrip(undefined);
+      setComposerOpen(false);
+      await refreshPosts();
+    } catch (err) {
+      Alert.alert(
+        "Could not post",
+        err instanceof Error ? err.message : "Please try again."
+      );
+    } finally {
+      setPosting(false);
+    }
   };
 
-  const deletePost = (postId: string) => {
+  const openEditPost = (post: Post) => {
+    setEditingPost(post);
+    setEditText(post.text ?? "");
+  };
+
+  const submitEditPost = async () => {
+    if (!editingPost || !editText.trim()) return;
+    setSavingEdit(true);
+    try {
+      await editPostText(editingPost.id, editText.trim());
+      setEditingPost(null);
+      await refreshPosts();
+    } catch (err) {
+      Alert.alert(
+        "Could not update post",
+        err instanceof Error ? err.message : "Please try again."
+      );
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const confirmDeletePost = (postId: string) => {
     Alert.alert("Delete post?", "This cannot be undone.", [
       { text: "Cancel", style: "cancel" },
       {
         text: "Delete",
         style: "destructive",
-        onPress: () => setPosts((prev) => prev.filter((p) => p.id !== postId)),
+        onPress: async () => {
+          try {
+            await deletePostApi(postId);
+            await refreshPosts();
+          } catch (err) {
+            Alert.alert(
+              "Could not delete",
+              err instanceof Error ? err.message : "Please try again."
+            );
+          }
+        },
       },
     ]);
   };
 
   // ---------- Likes ----------
-  const toggleLike = (postId: string) => {
-    setPosts((prev) =>
-      prev.map((p) => {
-        if (p.id !== postId) return p;
-        const liked = p.likes.some((u) => u.id === CURRENT_USER_ID);
-        return {
-          ...p,
-          likes: liked
-            ? p.likes.filter((u) => u.id !== CURRENT_USER_ID)
-            : [...p.likes, me],
-        };
-      })
-    );
+  const toggleLike = async (post: Post) => {
+    if (!myId) return;
+    const alreadyLiked = post.likes.some((u) => u.id === myId);
+    try {
+      if (alreadyLiked) {
+        await unlikePost(post.id);
+      } else {
+        await likePost(post.id);
+      }
+      await refreshPosts();
+    } catch (err) {
+      Alert.alert(
+        "Could not update like",
+        err instanceof Error ? err.message : "Please try again."
+      );
+    }
   };
 
   // ---------- Comments / Replies ----------
-  const submitComment = () => {
+  const submitComment = async () => {
     if (!commentsPostId || !commentDraft.trim()) return;
     const text = commentDraft.trim();
-    setPosts((prev) =>
-      prev.map((p) => {
-        if (p.id !== commentsPostId) return p;
-        if (replyTarget) {
-          return {
-            ...p,
-            comments: p.comments.map((c) =>
-              c.id === replyTarget.commentId
-                ? {
-                    ...c,
-                    replies: [
-                      ...c.replies,
-                      {
-                        id: uid("r"),
-                        user: me,
-                        text,
-                        createdAt: new Date().toISOString(),
-                      } as Reply,
-                    ],
-                  }
-                : c
-            ),
-          };
-        }
-        return {
-          ...p,
-          comments: [
-            ...p.comments,
-            {
-              id: uid("c"),
-              user: me,
-              text,
-              createdAt: new Date().toISOString(),
-              replies: [],
-            } as Comment,
-          ],
-        };
-      })
-    );
+    const parentCommentId = replyTarget?.commentId;
     setCommentDraft("");
     setReplyTarget(null);
+    try {
+      await addComment(commentsPostId, text, parentCommentId);
+      await refreshPosts();
+    } catch (err) {
+      Alert.alert(
+        "Could not post comment",
+        err instanceof Error ? err.message : "Please try again."
+      );
+    }
   };
 
-  const deleteComment = (postId: string, commentId: string) => {
+  const removeComment = (commentId: string) => {
     Alert.alert("Delete comment?", "", [
       { text: "Cancel", style: "cancel" },
       {
         text: "Delete",
         style: "destructive",
-        onPress: () =>
-          setPosts((prev) =>
-            prev.map((p) =>
-              p.id === postId
-                ? {
-                    ...p,
-                    comments: p.comments.filter((c) => c.id !== commentId),
-                  }
-                : p
-            )
-          ),
+        onPress: async () => {
+          try {
+            await deleteCommentApi(commentId);
+            await refreshPosts();
+          } catch (err) {
+            Alert.alert(
+              "Could not delete",
+              err instanceof Error ? err.message : "Please try again."
+            );
+          }
+        },
       },
     ]);
   };
 
-  const deleteReply = (
-    postId: string,
-    commentId: string,
-    replyId: string
-  ) => {
-    setPosts((prev) =>
-      prev.map((p) =>
-        p.id === postId
-          ? {
-              ...p,
-              comments: p.comments.map((c) =>
-                c.id === commentId
-                  ? {
-                      ...c,
-                      replies: c.replies.filter((r) => r.id !== replyId),
-                    }
-                  : c
-              ),
-            }
-          : p
-      )
-    );
-  };
-
   // ---------- Render ----------
   const renderPost = ({ item }: { item: Post }) => {
-    const liked = item.likes.some((u) => u.id === CURRENT_USER_ID);
-    const isMine = item.user.id === CURRENT_USER_ID;
-    const author = displayUser(item.user);
+    const liked = item.likes.some((u) => u.id === myId);
+    const isMine = item.user.id === myId;
     const commentCount =
       item.comments.length +
       item.comments.reduce((sum, c) => sum + c.replies.length, 0);
@@ -267,19 +371,26 @@ export default function SocialScreen() {
     return (
       <View style={styles.postCard}>
         <View style={styles.postHeader}>
-          <Image
-            source={{
-              uri:
-                author.avatar ?? "https://i.pravatar.cc/150?u=" + author.id,
-            }}
-            style={styles.avatar}
-          />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.userName}>{author.name}</Text>
-            <Text style={styles.timestamp}>{timeAgo(item.createdAt)}</Text>
-          </View>
+          <TouchableOpacity
+            style={styles.postHeaderTappable}
+            onPress={() => goToProfile(item.user.id)}
+          >
+            {renderAvatar(item.user.avatar, styles.avatar, 22)}
+            <View style={{ flex: 1 }}>
+              <Text style={styles.userName}>{item.user.name}</Text>
+              <Text style={styles.timestamp}>{timeAgo(item.createdAt)}</Text>
+            </View>
+          </TouchableOpacity>
+          {isMine && !item.imageUri && (
+            <TouchableOpacity
+              onPress={() => openEditPost(item)}
+              style={{ marginRight: 14 }}
+            >
+              <Ionicons name="pencil-outline" size={20} color={colors.textMuted} />
+            </TouchableOpacity>
+          )}
           {isMine && (
-            <TouchableOpacity onPress={() => deletePost(item.id)}>
+            <TouchableOpacity onPress={() => confirmDeletePost(item.id)}>
               <Ionicons name="trash-outline" size={20} color={colors.danger} />
             </TouchableOpacity>
           )}
@@ -294,20 +405,43 @@ export default function SocialScreen() {
             <Image source={{ uri: item.imageUri }} style={styles.postImage} />
           </TouchableOpacity>
         ) : null}
+        {item.sharedTrip ? (
+          <TouchableOpacity
+            style={styles.tripCard}
+            activeOpacity={0.8}
+            onPress={() =>
+              router.push({
+                pathname: "/shared-trip-view",
+                params: { id: item.sharedTrip!.id },
+              })
+            }
+          >
+            <View style={styles.tripCardIcon}>
+              <Ionicons name="airplane" size={20} color={colors.primary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.tripCardTitle}>{item.sharedTrip.title}</Text>
+              <Text style={styles.tripCardMeta}>
+                {formatTripDates(item.sharedTrip.date)} ·{" "}
+                {item.sharedTrip.eventsCount}{" "}
+                {item.sharedTrip.eventsCount === 1 ? "stop" : "stops"}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+          </TouchableOpacity>
+        ) : null}
 
         <View style={styles.actionsRow}>
           <TouchableOpacity
             style={styles.actionBtn}
-            onPress={() => toggleLike(item.id)}
+            onPress={() => toggleLike(item)}
           >
             <Ionicons
               name={liked ? "heart" : "heart-outline"}
               size={22}
               color={liked ? colors.danger : colors.textPrimary}
             />
-            <Text style={styles.actionText}>
-              {liked ? "Liked" : "Like"}
-            </Text>
+            <Text style={styles.actionText}>{liked ? "Liked" : "Like"}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -338,20 +472,47 @@ export default function SocialScreen() {
     );
   };
 
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
+      {error && (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorBannerText}>{error}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={loadAll}>
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       <View style={styles.headerRow}>
         <View>
           <Text style={styles.title}>Social</Text>
           <Text style={styles.subtitle}>Share your travel moments.</Text>
         </View>
-        <TouchableOpacity
-          style={styles.newBtn}
-          onPress={() => setComposerOpen(true)}
-        >
-          <Ionicons name="add" size={22} color={colors.primaryContrast} />
-          <Text style={styles.newBtnText}>Post</Text>
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={styles.findPeopleBtn}
+            onPress={() => router.push("/find-people")}
+            accessibilityRole="button"
+            accessibilityLabel="Find people"
+          >
+            <Ionicons name="people-outline" size={22} color={colors.primary} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.newBtn}
+            onPress={() => setComposerOpen(true)}
+          >
+            <Ionicons name="add" size={22} color={colors.primaryContrast} />
+            <Text style={styles.newBtnText}>Post</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <FlatList
@@ -360,6 +521,39 @@ export default function SocialScreen() {
         keyExtractor={(p) => p.id}
         contentContainerStyle={{ paddingBottom: 30 }}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor={colors.primary}
+          />
+        }
+        ListEmptyComponent={
+          <View style={styles.welcomeState}>
+            <Ionicons name="airplane-outline" size={56} color={colors.primary} />
+            <Text style={styles.welcomeTitle}>Welcome to Traveleria Social</Text>
+            <Text style={styles.welcomeSubtitle}>
+              Follow other travelers to see their trips and photos here, or
+              share your own adventure to get started.
+            </Text>
+            <TouchableOpacity
+              style={styles.welcomePrimaryBtn}
+              onPress={() => setComposerOpen(true)}
+            >
+              <Ionicons name="add" size={20} color={colors.primaryContrast} />
+              <Text style={styles.welcomePrimaryBtnText}>Create a Post</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.welcomeSecondaryBtn}
+              onPress={() => router.push("/find-people")}
+            >
+              <Ionicons name="people-outline" size={20} color={colors.primary} />
+              <Text style={styles.welcomeSecondaryBtnText}>
+                Find People to Follow
+              </Text>
+            </TouchableOpacity>
+          </View>
+        }
       />
 
       {/* ---------- Composer Modal ---------- */}
@@ -381,7 +575,7 @@ export default function SocialScreen() {
             {draftImage && (
               <View style={styles.draftImageWrap}>
                 <Image
-                  source={{ uri: draftImage }}
+                  source={{ uri: draftImage.uri }}
                   style={styles.draftImage}
                 />
                 <TouchableOpacity
@@ -389,6 +583,20 @@ export default function SocialScreen() {
                   onPress={() => setDraftImage(undefined)}
                 >
                   <Ionicons name="close" size={18} color="#fff" />
+                </TouchableOpacity>
+              </View>
+            )}
+            {draftTrip && (
+              <View style={styles.draftTripChip}>
+                <Ionicons name="airplane" size={18} color={colors.primary} />
+                <View style={{ flex: 1, marginLeft: 8 }}>
+                  <Text style={styles.draftTripTitle}>{draftTrip.title}</Text>
+                  <Text style={styles.draftTripDate}>
+                    {formatTripDates(draftTrip.date)}
+                  </Text>
+                </View>
+                <TouchableOpacity onPress={() => setDraftTrip(undefined)}>
+                  <Ionicons name="close" size={18} color={colors.textMuted} />
                 </TouchableOpacity>
               </View>
             )}
@@ -408,6 +616,10 @@ export default function SocialScreen() {
                 <Ionicons name="camera-outline" size={22} color={colors.primary} />
                 <Text style={styles.iconBtnText}>Camera</Text>
               </TouchableOpacity>
+              <TouchableOpacity style={styles.iconBtn} onPress={openTripPicker}>
+                <Ionicons name="airplane-outline" size={22} color={colors.primary} />
+                <Text style={styles.iconBtnText}>Trip</Text>
+              </TouchableOpacity>
             </View>
 
             <View style={styles.modalButtons}>
@@ -417,15 +629,130 @@ export default function SocialScreen() {
                   setComposerOpen(false);
                   setDraftText("");
                   setDraftImage(undefined);
+                  setDraftTrip(undefined);
                 }}
+                disabled={posting}
               >
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.modalButton, styles.saveButton]}
+                style={[
+                  styles.modalButton,
+                  styles.saveButton,
+                  posting && { opacity: 0.6 },
+                ]}
                 onPress={submitPost}
+                disabled={posting}
               >
-                <Text style={styles.saveButtonText}>Post</Text>
+                {posting ? (
+                  <ActivityIndicator size="small" color={colors.surface} />
+                ) : (
+                  <Text style={styles.saveButtonText}>Post</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* ---------- Trip Picker Modal ---------- */}
+      <Modal
+        visible={tripPickerOpen}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setTripPickerOpen(false)}
+      >
+        <View style={styles.commentsOverlay}>
+          <View
+            style={[styles.commentsSheet, { paddingBottom: 24 + insets.bottom }]}
+          >
+            <View style={styles.commentsHeader}>
+              <Text style={styles.modalTitle}>Share a Trip</Text>
+              <TouchableOpacity onPress={() => setTripPickerOpen(false)}>
+                <Ionicons name="close" size={26} color={colors.danger} />
+              </TouchableOpacity>
+            </View>
+            {loadingMyTrips ? (
+              <ActivityIndicator
+                size="large"
+                color={colors.primary}
+                style={{ marginTop: 30 }}
+              />
+            ) : (
+              <ScrollView style={{ flex: 1 }}>
+                {myTrips.length === 0 && (
+                  <Text style={styles.emptyText}>
+                    You don't have any trips yet.
+                  </Text>
+                )}
+                {myTrips.map((trip) => (
+                  <TouchableOpacity
+                    key={trip.id}
+                    style={styles.tripPickerRow}
+                    onPress={() => selectTripToShare(trip)}
+                  >
+                    <Ionicons
+                      name="airplane-outline"
+                      size={20}
+                      color={colors.primary}
+                    />
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <Text style={styles.tripCardTitle}>{trip.title}</Text>
+                      <Text style={styles.tripCardMeta}>
+                        {formatTripDates(trip.date)}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* ---------- Edit Post Modal ---------- */}
+      <Modal
+        visible={!!editingPost}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setEditingPost(null)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={styles.modalOverlay}
+        >
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Edit Post</Text>
+            <TextInput
+              style={styles.composerInput}
+              placeholder="Share an experience..."
+              placeholderTextColor={colors.textDisabled}
+              value={editText}
+              onChangeText={setEditText}
+              multiline
+            />
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => setEditingPost(null)}
+                disabled={savingEdit}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.modalButton,
+                  styles.saveButton,
+                  savingEdit && { opacity: 0.6 },
+                ]}
+                onPress={submitEditPost}
+                disabled={savingEdit}
+              >
+                {savingEdit ? (
+                  <ActivityIndicator size="small" color={colors.surface} />
+                ) : (
+                  <Text style={styles.saveButtonText}>Save</Text>
+                )}
               </TouchableOpacity>
             </View>
           </View>
@@ -471,21 +798,19 @@ export default function SocialScreen() {
           <View style={[styles.modalContent, { minHeight: 380 }]}>
             <Text style={styles.modalTitle}>Liked by</Text>
             <ScrollView style={{ minHeight: 240, maxHeight: 380 }}>
-              {likesModalUsers?.map((rawUser) => {
-                const u = displayUser(rawUser);
-                return (
-                  <View key={u.id} style={styles.likeRow}>
-                    <Image
-                      source={{
-                        uri:
-                          u.avatar ?? "https://i.pravatar.cc/150?u=" + u.id,
-                      }}
-                      style={styles.smallAvatar}
-                    />
-                    <Text style={styles.likeName}>{u.name}</Text>
-                  </View>
-                );
-              })}
+              {likesModalUsers?.map((u) => (
+                <TouchableOpacity
+                  key={u.id}
+                  style={styles.likeRow}
+                  onPress={() => {
+                    setLikesModalUsers(null);
+                    goToProfile(u.id);
+                  }}
+                >
+                  {renderAvatar(u.avatar, styles.smallAvatar, 18)}
+                  <Text style={styles.likeName}>{u.name}</Text>
+                </TouchableOpacity>
+              ))}
             </ScrollView>
             <TouchableOpacity
               style={[
@@ -518,13 +843,23 @@ export default function SocialScreen() {
           setCommentsPostId(null);
           setReplyTarget(null);
           setCommentDraft("");
+          setExpandedComments(new Set());
         }}
       >
         <KeyboardAvoidingView
           behavior={Platform.OS === "ios" ? "padding" : undefined}
           style={styles.commentsOverlay}
         >
-          <View style={styles.commentsSheet}>
+          <View
+            style={[
+              styles.commentsSheet,
+              // The system nav bar / gesture strip on Android sits under
+              // this sheet's fixed paddingBottom, which is why the send
+              // button was getting covered. insets.bottom is the actual
+              // reserved height on this specific device.
+              { paddingBottom: 36 + insets.bottom },
+            ]}
+          >
             <View style={styles.commentsHeader}>
               <Text style={styles.modalTitle}>Comments</Text>
               <TouchableOpacity
@@ -544,20 +879,16 @@ export default function SocialScreen() {
                   No comments yet. Be the first!
                 </Text>
               )}
-              {activePost?.comments.map((c) => {
-                const cu = displayUser(c.user);
-                return (
+              {activePost?.comments.map((c: Comment) => (
                 <View key={c.id} style={styles.commentBlock}>
                   <View style={styles.commentRow}>
-                    <Image
-                      source={{
-                        uri:
-                          cu.avatar ?? "https://i.pravatar.cc/150?u=" + cu.id,
-                      }}
-                      style={styles.smallAvatar}
-                    />
+                    <TouchableOpacity onPress={() => goToProfile(c.user.id)}>
+                      {renderAvatar(c.user.avatar, styles.smallAvatar, 18)}
+                    </TouchableOpacity>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.commentName}>{cu.name}</Text>
+                      <TouchableOpacity onPress={() => goToProfile(c.user.id)}>
+                        <Text style={styles.commentName}>{c.user.name}</Text>
+                      </TouchableOpacity>
                       <Text style={styles.commentText}>{c.text}</Text>
                       <View style={styles.commentMetaRow}>
                         <Text style={styles.commentMeta}>
@@ -567,18 +898,14 @@ export default function SocialScreen() {
                           onPress={() =>
                             setReplyTarget({
                               commentId: c.id,
-                              userName: cu.name,
+                              userName: c.user.name,
                             })
                           }
                         >
                           <Text style={styles.replyLink}>Reply</Text>
                         </TouchableOpacity>
-                        {c.user.id === CURRENT_USER_ID && (
-                          <TouchableOpacity
-                            onPress={() =>
-                              deleteComment(activePost.id, c.id)
-                            }
-                          >
+                        {c.user.id === myId && (
+                          <TouchableOpacity onPress={() => removeComment(c.id)}>
                             <Text
                               style={[styles.replyLink, { color: colors.danger }]}
                             >
@@ -590,29 +917,67 @@ export default function SocialScreen() {
                     </View>
                   </View>
 
-                  {c.replies.map((r) => {
-                    const ru = displayUser(r.user);
-                    return (
-                    <View key={r.id} style={styles.replyRow}>
-                      <Image
-                        source={{
-                          uri:
-                            ru.avatar ?? "https://i.pravatar.cc/150?u=" + ru.id,
-                        }}
-                        style={styles.tinyAvatar}
-                      />
+                  {c.replies.length > 0 && (
+                    <TouchableOpacity
+                      style={styles.viewRepliesBtn}
+                      onPress={() => toggleExpanded(c.id)}
+                    >
+                      <View style={styles.viewRepliesLine} />
+                      <Text style={styles.viewRepliesText}>
+                        {expandedComments.has(c.id)
+                          ? "Hide replies"
+                          : `View ${c.replies.length} ${
+                              c.replies.length === 1 ? "reply" : "replies"
+                            }`}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+
+                  {expandedComments.has(c.id) && c.replies.map((r: Reply) => (
+                    <View
+                      key={r.id}
+                      style={[
+                        styles.replyRow,
+                        // A gentle per-level shift, not a big one — the
+                        // connecting line (in the base style) is what shows
+                        // the thread's shape, so indent alone doesn't have
+                        // to. Capped so a very deep thread still leaves room
+                        // for the text on a phone screen.
+                        { marginLeft: 46 + Math.min(r.depth - 1, 4) * 16 },
+                      ]}
+                    >
+                      <TouchableOpacity onPress={() => goToProfile(r.user.id)}>
+                        {renderAvatar(r.user.avatar, styles.tinyAvatar, 14)}
+                      </TouchableOpacity>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.commentName}>{ru.name}</Text>
-                        <Text style={styles.commentText}>{r.text}</Text>
+                        <TouchableOpacity onPress={() => goToProfile(r.user.id)}>
+                          <Text style={styles.commentName}>{r.user.name}</Text>
+                        </TouchableOpacity>
+                        <Text style={styles.commentText}>
+                          {r.replyingToName && (
+                            <Text style={styles.replyingToTag}>
+                              @{r.replyingToName}{" "}
+                            </Text>
+                          )}
+                          {r.text}
+                        </Text>
                         <View style={styles.commentMetaRow}>
                           <Text style={styles.commentMeta}>
                             {timeAgo(r.createdAt)}
                           </Text>
-                          {r.user.id === CURRENT_USER_ID && (
+                          <TouchableOpacity
+                            onPress={() =>
+                              setReplyTarget({
+                                commentId: r.id,
+                                userName: r.user.name,
+                              })
+                            }
+                          >
+                            <Text style={styles.replyLink}>Reply</Text>
+                          </TouchableOpacity>
+                          {r.user.id === myId && (
                             <TouchableOpacity
-                              onPress={() =>
-                                deleteReply(activePost.id, c.id, r.id)
-                              }
+                              onPress={() => removeComment(r.id)}
                             >
                               <Text
                                 style={[
@@ -627,11 +992,9 @@ export default function SocialScreen() {
                         </View>
                       </View>
                     </View>
-                    );
-                  })}
+                  ))}
                 </View>
-                );
-              })}
+              ))}
             </ScrollView>
 
             {replyTarget && (
@@ -656,10 +1019,7 @@ export default function SocialScreen() {
                 onChangeText={setCommentDraft}
                 multiline
               />
-              <TouchableOpacity
-                style={styles.sendBtn}
-                onPress={submitComment}
-              >
+              <TouchableOpacity style={styles.sendBtn} onPress={submitComment}>
                 <Ionicons name="send" size={20} color={colors.primaryContrast} />
               </TouchableOpacity>
             </View>
@@ -673,6 +1033,35 @@ export default function SocialScreen() {
 const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background, padding: 20, paddingTop: 60 },
+  centered: { justifyContent: "center", alignItems: "center" },
+  errorBanner: {
+    backgroundColor: colors.dangerSoft,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.lg,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderRadius: Radius.sm,
+    marginBottom: 12,
+  },
+  errorBannerText: {
+    color: colors.danger,
+    fontSize: FontSize.caption,
+    fontFamily: FontFamily.regular,
+    flex: 1,
+    marginRight: Spacing.md,
+  },
+  retryButton: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
+    borderRadius: Radius.sm,
+  },
+  retryButtonText: {
+    color: colors.primaryContrast,
+    fontFamily: FontFamily.semibold,
+    fontSize: FontSize.caption,
+  },
   headerRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -681,6 +1070,16 @@ const makeStyles = (colors: ThemeColors) =>
   },
   title: { fontSize: 30, fontWeight: "bold", color: colors.textPrimary },
   subtitle: { fontSize: 14, color: colors.textMuted, marginTop: 2 },
+  headerActions: { flexDirection: "row", alignItems: "center" },
+  findPeopleBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 8,
+    backgroundColor: colors.primarySoft,
+  },
   newBtn: {
     backgroundColor: colors.primary,
     flexDirection: "row",
@@ -696,13 +1095,19 @@ const makeStyles = (colors: ThemeColors) =>
     borderRadius: 15,
     padding: 14,
     marginBottom: 14,
-    elevation: 2,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
+    // Shared with the rest of the app's cards (e.g. home.tsx's trip cards)
+    // rather than a hand-rolled shadow — that's also what makes dark mode
+    // look right, since a raw shadow barely shows against a dark background.
+    ...Elevation.sm,
   },
   postHeader: { flexDirection: "row", alignItems: "center", marginBottom: 10 },
+  postHeaderTappable: { flex: 1, flexDirection: "row", alignItems: "center" },
   avatar: { width: 40, height: 40, borderRadius: 20, marginRight: 10 },
+  avatarPlaceholder: {
+    backgroundColor: colors.surfaceSunken,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   userName: { fontSize: 15, fontWeight: "bold", color: colors.textPrimary },
   timestamp: { fontSize: 12, color: colors.textMuted, marginTop: 1 },
   postText: { fontSize: 15, color: colors.textPrimary, lineHeight: 21, marginBottom: 10 },
@@ -712,6 +1117,42 @@ const makeStyles = (colors: ThemeColors) =>
     borderRadius: 12,
     marginBottom: 8,
     backgroundColor: colors.border,
+  },
+  tripCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.surfaceSunken,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+  },
+  tripCardIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.primarySoft,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 10,
+  },
+  tripCardTitle: { fontSize: 14, fontWeight: "bold", color: colors.textPrimary },
+  tripCardMeta: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
+  draftTripChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.surfaceSunken,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+  },
+  draftTripTitle: { fontSize: 14, fontWeight: "bold", color: colors.textPrimary },
+  draftTripDate: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
+  tripPickerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
   },
   actionsRow: {
     flexDirection: "row",
@@ -744,6 +1185,9 @@ const makeStyles = (colors: ThemeColors) =>
     fontWeight: "bold",
     marginBottom: 14,
     textAlign: "center",
+    // Never had a colour, so it rendered in the system default (black),
+    // unreadable against the dark surface these modals use in dark mode.
+    color: colors.textPrimary,
   },
   composerInput: {
     minHeight: 90,
@@ -827,16 +1271,89 @@ const makeStyles = (colors: ThemeColors) =>
     marginTop: 30,
     fontSize: 14,
   },
+  welcomeState: {
+    alignItems: "center",
+    paddingTop: 60,
+    paddingHorizontal: 30,
+  },
+  welcomeTitle: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: colors.textPrimary,
+    marginTop: 16,
+    textAlign: "center",
+  },
+  welcomeSubtitle: {
+    fontSize: 14,
+    color: colors.textMuted,
+    textAlign: "center",
+    marginTop: 8,
+    lineHeight: 20,
+  },
+  welcomePrimaryBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.primary,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 24,
+    marginTop: 24,
+  },
+  welcomePrimaryBtnText: {
+    color: colors.primaryContrast,
+    fontWeight: "bold",
+    marginLeft: 8,
+    fontSize: 15,
+  },
+  welcomeSecondaryBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 24,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  welcomeSecondaryBtnText: {
+    color: colors.primary,
+    fontWeight: "bold",
+    marginLeft: 8,
+    fontSize: 15,
+  },
   commentBlock: { marginBottom: 14 },
   commentRow: { flexDirection: "row", alignItems: "flex-start" },
+  viewRepliesBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 8,
+    marginLeft: 46,
+  },
+  viewRepliesLine: {
+    width: 24,
+    height: 1,
+    backgroundColor: colors.border,
+    marginRight: 8,
+  },
+  viewRepliesText: {
+    fontSize: 12,
+    color: colors.textMuted,
+    fontWeight: "600",
+  },
   replyRow: {
+    // marginLeft is set per-reply based on depth — see the render call.
     flexDirection: "row",
     alignItems: "flex-start",
     marginTop: 10,
-    marginLeft: 46,
+    // The connecting line down the side of a thread — this is what actually
+    // shows the nesting; the indent itself only needs to shift gently.
+    borderLeftWidth: 2,
+    borderLeftColor: colors.border,
+    paddingLeft: 10,
   },
   commentName: { fontWeight: "bold", color: colors.textPrimary, fontSize: 14 },
   commentText: { color: colors.textPrimary, fontSize: 14, marginTop: 2 },
+  replyingToTag: { color: colors.primary, fontWeight: "600" },
   commentMetaRow: { flexDirection: "row", alignItems: "center", marginTop: 4 },
   commentMeta: { fontSize: 12, color: colors.textMuted, marginRight: 14 },
   replyLink: { fontSize: 12, color: colors.primary, fontWeight: "600", marginRight: 14 },

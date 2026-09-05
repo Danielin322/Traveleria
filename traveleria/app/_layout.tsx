@@ -13,6 +13,7 @@ import {
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import awsConfig from "../config/awsConfig";
 import { CurrentUserProvider } from "../contexts/CurrentUserContext";
@@ -91,10 +92,12 @@ export default function RootLayout() {
   }
 
   return (
-    <ThemeProvider>
-      <CurrentUserProvider>
-        <RootNavigator />
-      </CurrentUserProvider>
-    </ThemeProvider>
+    <SafeAreaProvider>
+      <ThemeProvider>
+        <CurrentUserProvider>
+          <RootNavigator />
+        </CurrentUserProvider>
+      </ThemeProvider>
+    </SafeAreaProvider>
   );
 }
