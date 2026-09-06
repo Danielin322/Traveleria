@@ -9,11 +9,18 @@
 #   COGNITO_USER_POOL_ID=your-pool-id
 #   COGNITO_APP_CLIENT_ID=your-client-id
 #   OPENAI_API_KEY=your-openai-api-key
-#   GOOGLE_PLACES_API_KEY=your-google-places-api-key   (optional — enables map pins for chat-added items)
+#   GOOGLE_PLACES_API_KEY=your-google-places-api-key   (optional — enables map pins for chat-added items,
+#                                                        and the destination autocomplete on New Journey)
+#   PEXELS_API_KEY=your-pexels-api-key                 (optional — enables trip destination cover photos)
 #   WALLET_BUCKET=your-s3-bucket-name   (optional — defaults to
 #                                        traveleria-wallet-<account-id>;
 #                                        the bucket itself must already exist,
 #                                        this script does not create it)
+#   TRIP_COVERS_BUCKET=your-s3-bucket-name   (optional — defaults to
+#                                        traveleria-trip-covers-<account-id>;
+#                                        the bucket itself must already exist
+#                                        and be public-read, this script does
+#                                        not create it)
 # See .env.example for a template.
 
 set -euo pipefail
@@ -39,7 +46,9 @@ ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/LabRole"
 
 COGNITO_REGION="${COGNITO_REGION:-us-east-1}"
 GOOGLE_PLACES_API_KEY="${GOOGLE_PLACES_API_KEY:-}"
+PEXELS_API_KEY="${PEXELS_API_KEY:-}"
 WALLET_BUCKET="${WALLET_BUCKET:-traveleria-wallet-${ACCOUNT_ID}}"
+TRIP_COVERS_BUCKET="${TRIP_COVERS_BUCKET:-traveleria-trip-covers-${ACCOUNT_ID}}"
 
 if ! aws s3api head-bucket --bucket "$WALLET_BUCKET" --region "$REGION" 2>/dev/null; then
     echo "WARNING: S3 bucket '${WALLET_BUCKET}' not found or not readable."
@@ -48,7 +57,14 @@ if ! aws s3api head-bucket --bucket "$WALLET_BUCKET" --region "$REGION" 2>/dev/n
     echo ""
 fi
 
-ENV_JSON="{\"Variables\":{\"DATABASE_URL\":\"${DATABASE_URL}\",\"COGNITO_REGION\":\"${COGNITO_REGION}\",\"COGNITO_USER_POOL_ID\":\"${COGNITO_USER_POOL_ID}\",\"COGNITO_APP_CLIENT_ID\":\"${COGNITO_APP_CLIENT_ID}\",\"OPENAI_API_KEY\":\"${OPENAI_API_KEY}\",\"GOOGLE_PLACES_API_KEY\":\"${GOOGLE_PLACES_API_KEY}\",\"WALLET_BUCKET\":\"${WALLET_BUCKET}\"}}"
+if ! aws s3api head-bucket --bucket "$TRIP_COVERS_BUCKET" --region "$REGION" 2>/dev/null; then
+    echo "WARNING: S3 bucket '${TRIP_COVERS_BUCKET}' not found or not readable."
+    echo "         Trip destination covers will fall back to the default image until"
+    echo "         it exists and is public-read — see photo_cover.md for the setup commands."
+    echo ""
+fi
+
+ENV_JSON="{\"Variables\":{\"DATABASE_URL\":\"${DATABASE_URL}\",\"COGNITO_REGION\":\"${COGNITO_REGION}\",\"COGNITO_USER_POOL_ID\":\"${COGNITO_USER_POOL_ID}\",\"COGNITO_APP_CLIENT_ID\":\"${COGNITO_APP_CLIENT_ID}\",\"OPENAI_API_KEY\":\"${OPENAI_API_KEY}\",\"GOOGLE_PLACES_API_KEY\":\"${GOOGLE_PLACES_API_KEY}\",\"PEXELS_API_KEY\":\"${PEXELS_API_KEY}\",\"WALLET_BUCKET\":\"${WALLET_BUCKET}\",\"TRIP_COVERS_BUCKET\":\"${TRIP_COVERS_BUCKET}\"}}"
 
 LAMBDAS=(
     "health"
@@ -211,6 +227,7 @@ add_method() {
 
 echo "  Building resource tree..."
 TRIPS_ID=$(make_resource "$ROOT_ID"  "trips")
+AUTOCOMPLETE_ID=$(make_resource "$TRIPS_ID" "autocomplete")
 TRIP_ID=$(make_resource  "$TRIPS_ID" "{trip_id}")
 ITIN_ID=$(make_resource  "$TRIP_ID"  "itinerary")
 EVENT_ID=$(make_resource "$ITIN_ID"  "{event_id}")
@@ -244,6 +261,7 @@ echo "  Wiring routes → Lambdas..."
 add_method "$ROOT_ID"  "GET"    "traveleria-health"
 add_method "$TRIPS_ID" "GET"    "traveleria-trips"
 add_method "$TRIPS_ID" "POST"   "traveleria-trips"
+add_method "$AUTOCOMPLETE_ID" "GET" "traveleria-trips"
 add_method "$TRIP_ID"  "PUT"    "traveleria-trips"
 add_method "$TRIP_ID"  "DELETE" "traveleria-trips"
 add_method "$ITIN_ID"  "GET"    "traveleria-itinerary"
@@ -297,3 +315,5 @@ echo ""
 echo "  -> Set EXPO_PUBLIC_API_URL=${API_URL}"
 echo "     in traveleria/.env then rebuild the app."
 echo ""
+
+

@@ -1,10 +1,12 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Image,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   RefreshControl,
@@ -12,6 +14,7 @@ import {
   SectionList,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -84,6 +87,13 @@ export default function HomeScreen() {
   // Guards against a double tap creating the same trip twice.
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  const [destinationSuggestions, setDestinationSuggestions] = useState<
+    { placeId: string; description: string }[]
+  >([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  // Debounced so typing does not fire an autocomplete request per keystroke.
+  const autocompleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Upcoming trips first (soonest at the top), past trips below.
   const sections = useMemo(() => {
     const { upcoming, past } = groupTripsByTime(trips);
@@ -150,6 +160,44 @@ export default function HomeScreen() {
     setEndDate(null);
     setFieldErrors({});
     setAddError(null);
+    setDestinationSuggestions([]);
+    setShowSuggestions(false);
+  };
+
+  const fetchDestinationSuggestions = async (text: string) => {
+    if (!API_URL || text.trim().length < 2) {
+      setDestinationSuggestions([]);
+      return;
+    }
+    try {
+      const response = await apiFetch(
+        `/trips/autocomplete?q=${encodeURIComponent(text.trim())}`,
+      );
+      const data = await response.json();
+      setDestinationSuggestions(Array.isArray(data) ? data : []);
+    } catch {
+      // A failed autocomplete lookup just means no suggestions — the field
+      // still accepts free text, so this is not surfaced as an error.
+      setDestinationSuggestions([]);
+    }
+  };
+
+  const handleLocationChange = (text: string) => {
+    setNewLocation(text);
+    if (fieldErrors.location)
+      setFieldErrors((prev) => ({ ...prev, location: undefined }));
+    setShowSuggestions(true);
+    if (autocompleteTimer.current) clearTimeout(autocompleteTimer.current);
+    autocompleteTimer.current = setTimeout(
+      () => fetchDestinationSuggestions(text),
+      300,
+    );
+  };
+
+  const selectDestination = (description: string) => {
+    setNewLocation(description);
+    setDestinationSuggestions([]);
+    setShowSuggestions(false);
   };
 
   const closeTripModal = () => {
@@ -540,6 +588,9 @@ export default function HomeScreen() {
         accessibilityRole={isSelecting ? "checkbox" : "button"}
         accessibilityState={isSelecting ? { checked: isSelected } : undefined}
       >
+        {!!item.coverImageUrl && (
+          <Image source={{ uri: item.coverImageUrl }} style={styles.tripCover} />
+        )}
         <View style={styles.tripInfo}>
           <View style={styles.tripCardTopRow}>
             <Text
@@ -582,6 +633,18 @@ export default function HomeScreen() {
           <Text style={styles.dateText}>{formatTripDates(item.date)}</Text>
           {sharedLine && (
             <Text style={styles.sharedByText}>{sharedLine}</Text>
+          )}
+          {/* Not required by Pexels's license, but a nice credit to the
+              photographer; the fallback default image has no credit. */}
+          {!!item.creditName && (
+            <TouchableOpacity
+              onPress={() => item.creditUrl && Linking.openURL(item.creditUrl)}
+              hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+            >
+              <Text style={styles.creditText}>
+                Photo by {item.creditName} on Pexels
+              </Text>
+            </TouchableOpacity>
           )}
         </View>
 
@@ -792,21 +855,40 @@ export default function HomeScreen() {
                 maxLength={LIMITS.tripTitle.max}
               />
 
-              <FormField
-                label="Destination"
-                placeholder="e.g. Rome"
-                value={newLocation}
-                error={fieldErrors.location}
-                onChangeText={(text) => {
-                  setNewLocation(text);
-                  if (fieldErrors.location)
-                    setFieldErrors((prev) => ({
-                      ...prev,
-                      location: undefined,
-                    }));
-                }}
-                maxLength={LIMITS.destination.max}
-              />
+              <FormField label="Destination" error={fieldErrors.location}>
+                <TextInput
+                  style={[
+                    fieldStyles.input,
+                    !!fieldErrors.location && fieldStyles.inputError,
+                  ]}
+                  placeholder="e.g. Rome"
+                  placeholderTextColor={colors.textDisabled}
+                  value={newLocation}
+                  onChangeText={handleLocationChange}
+                  onFocus={() => setShowSuggestions(true)}
+                  maxLength={LIMITS.destination.max}
+                />
+                {showSuggestions && destinationSuggestions.length > 0 && (
+                  <View style={styles.suggestionsBox}>
+                    {destinationSuggestions.map((suggestion) => (
+                      <TouchableOpacity
+                        key={suggestion.placeId}
+                        style={styles.suggestionRow}
+                        onPress={() => selectDestination(suggestion.description)}
+                      >
+                        <Ionicons
+                          name="location-outline"
+                          size={16}
+                          color={colors.textSecondary}
+                        />
+                        <Text style={styles.suggestionText}>
+                          {suggestion.description}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </FormField>
 
               {/* Looks like an input, opens the range calendar. */}
               <FormField label="Dates" error={fieldErrors.dates}>
@@ -961,6 +1043,13 @@ const makeStyles = (colors: ThemeColors) =>
       borderLeftWidth: 4,
       borderLeftColor: colors.shared,
     },
+    tripCover: {
+      width: 56,
+      height: 56,
+      borderRadius: Radius.md,
+      marginRight: Spacing.md,
+      backgroundColor: colors.surfaceSunken,
+    },
     // Past trips recede so upcoming ones read as the active content.
     tripCardPast: { opacity: 0.65 },
     tripCardSelected: {
@@ -1055,6 +1144,12 @@ const makeStyles = (colors: ThemeColors) =>
       fontSize: FontSize.small,
       fontFamily: FontFamily.regular,
       color: colors.textSecondary,
+      marginTop: Spacing.xs,
+    },
+    creditText: {
+      fontSize: FontSize.tiny,
+      fontFamily: FontFamily.regular,
+      color: colors.textDisabled,
       marginTop: Spacing.xs,
     },
     badge: {
@@ -1156,6 +1251,29 @@ const makeStyles = (colors: ThemeColors) =>
     },
     modalButtons: { flexDirection: "row", gap: Spacing.md },
     modalButton: { flex: 1 },
+    suggestionsBox: {
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: Radius.md,
+      marginTop: Spacing.xs,
+      backgroundColor: colors.surface,
+      overflow: "hidden",
+    },
+    suggestionRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: Spacing.sm,
+      paddingVertical: Spacing.sm,
+      paddingHorizontal: Spacing.md,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    suggestionText: {
+      fontSize: FontSize.body,
+      fontFamily: FontFamily.regular,
+      color: colors.textPrimary,
+      flexShrink: 1,
+    },
 
     errorContainer: { alignItems: "center", marginTop: 40 },
     errorText: {

@@ -58,6 +58,9 @@ def serialize_trip(row: dict) -> dict:
         "title": row["title"],
         "location": row["location"],
         "date": format_trip_date(row["start_date"], row["end_date"]),
+        "coverImageUrl": row.get("cover_image_url"),
+        "creditName": row.get("credit_name"),
+        "creditUrl": row.get("credit_url"),
     }
 
 
