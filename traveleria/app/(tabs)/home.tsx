@@ -4,9 +4,8 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Image,
+  ImageBackground,
   KeyboardAvoidingView,
-  Linking,
   Modal,
   Platform,
   RefreshControl,
@@ -555,46 +554,23 @@ export default function HomeScreen() {
     const isPast = status?.kind === "past";
 
     const isSelected = selectedIds.has(item.id);
+    // Nearly every trip has one (the backend falls back to a default cover),
+    // but a legacy trip predating this feature could still have none.
+    const hasCover = !!item.coverImageUrl;
 
-    return (
-      <TouchableOpacity
-        style={[
-          styles.tripCard,
-          isShared && styles.tripCardShared,
-          isPast && styles.tripCardPast,
-          // Last, so a selected shared trip still reads as selected.
-          isSelected && styles.tripCardSelected,
-        ]}
-        onPress={() => {
-          // While selecting, the card toggles instead of navigating —
-          // opening a trip mid-selection would lose the ticks. A shared trip
-          // cannot be selected, so it stays inert rather than pretending.
-          if (isSelecting) {
-            toggleSelected(item);
-            return;
-          }
-          router.push({
-            pathname: "/trip-details",
-            params: {
-              id: item.id,
-              title: item.title,
-              location: item.location,
-              date: item.date,
-            },
-          });
-        }}
-        onLongPress={() => enterSelection(item)}
-        delayLongPress={300}
-        accessibilityRole={isSelecting ? "checkbox" : "button"}
-        accessibilityState={isSelecting ? { checked: isSelected } : undefined}
-      >
-        {!!item.coverImageUrl && (
-          <Image source={{ uri: item.coverImageUrl }} style={styles.tripCover} />
-        )}
+    const cardBody = (
+      <>
+        {/* Keeps title/date legible over an arbitrary photo, regardless of
+            how bright or busy it is. */}
+        {hasCover && <View style={styles.tripCardScrim} />}
         <View style={styles.tripInfo}>
           <View style={styles.tripCardTopRow}>
             <Text
-              style={[styles.locationText, isShared && styles.locationTextShared]}
+              style={[
+                styles.locationText,
+                isShared && styles.locationTextShared,
+                hasCover && styles.locationTextOnCover,
+              ]}
             >
               {item.location}
             </Text>
@@ -629,22 +605,18 @@ export default function HomeScreen() {
               </View>
             )}
           </View>
-          <Text style={styles.tripTitle}>{item.title}</Text>
-          <Text style={styles.dateText}>{formatTripDates(item.date)}</Text>
+          <Text style={[styles.tripTitle, hasCover && styles.tripTitleOnCover]}>
+            {item.title}
+          </Text>
+          <Text style={[styles.dateText, hasCover && styles.dateTextOnCover]}>
+            {formatTripDates(item.date)}
+          </Text>
           {sharedLine && (
-            <Text style={styles.sharedByText}>{sharedLine}</Text>
-          )}
-          {/* Not required by Pexels's license, but a nice credit to the
-              photographer; the fallback default image has no credit. */}
-          {!!item.creditName && (
-            <TouchableOpacity
-              onPress={() => item.creditUrl && Linking.openURL(item.creditUrl)}
-              hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+            <Text
+              style={[styles.sharedByText, hasCover && styles.sharedByTextOnCover]}
             >
-              <Text style={styles.creditText}>
-                Photo by {item.creditName} on Pexels
-              </Text>
-            </TouchableOpacity>
+              {sharedLine}
+            </Text>
           )}
         </View>
 
@@ -657,7 +629,13 @@ export default function HomeScreen() {
             <Ionicons
               name={isSelected ? "checkmark-circle" : "ellipse-outline"}
               size={24}
-              color={isSelected ? colors.primary : colors.textDisabled}
+              color={
+                isSelected
+                  ? colors.primary
+                  : hasCover
+                    ? "#FFFFFF"
+                    : colors.textDisabled
+              }
             />
           )
         ) : (
@@ -671,7 +649,7 @@ export default function HomeScreen() {
               <Ionicons
                 name="pencil-outline"
                 size={19}
-                color={isShared ? colors.shared : colors.primary}
+                color={hasCover ? "#FFFFFF" : isShared ? colors.shared : colors.primary}
               />
             </TouchableOpacity>
             {!isOwned ? (
@@ -696,9 +674,56 @@ export default function HomeScreen() {
             <Ionicons
               name="chevron-forward"
               size={20}
-              color={isShared ? colors.shared : colors.primary}
+              color={hasCover ? "#FFFFFF" : isShared ? colors.shared : colors.primary}
             />
           </View>
+        )}
+      </>
+    );
+
+    return (
+      <TouchableOpacity
+        style={[
+          styles.tripCard,
+          isShared && styles.tripCardShared,
+          isPast && styles.tripCardPast,
+          // Last, so a selected shared trip still reads as selected.
+          isSelected && styles.tripCardSelected,
+        ]}
+        onPress={() => {
+          // While selecting, the card toggles instead of navigating —
+          // opening a trip mid-selection would lose the ticks. A shared trip
+          // cannot be selected, so it stays inert rather than pretending.
+          if (isSelecting) {
+            toggleSelected(item);
+            return;
+          }
+          router.push({
+            pathname: "/trip-details",
+            params: {
+              id: item.id,
+              title: item.title,
+              location: item.location,
+              date: item.date,
+            },
+          });
+        }}
+        onLongPress={() => enterSelection(item)}
+        delayLongPress={300}
+        accessibilityRole={isSelecting ? "checkbox" : "button"}
+        accessibilityState={isSelecting ? { checked: isSelected } : undefined}
+      >
+        {hasCover ? (
+          <ImageBackground
+            source={{ uri: item.coverImageUrl }}
+            style={styles.tripCardBackground}
+            imageStyle={styles.tripCardBackgroundImage}
+            resizeMode="cover"
+          >
+            {cardBody}
+          </ImageBackground>
+        ) : (
+          <View style={styles.tripCardBackground}>{cardBody}</View>
         )}
       </TouchableOpacity>
     );
@@ -1024,13 +1049,10 @@ const makeStyles = (colors: ThemeColors) =>
     listContainer: { paddingBottom: Spacing.xl },
 
     tripCard: {
-      backgroundColor: colors.surface,
       borderRadius: Radius.lg,
-      padding: Spacing.lg,
       marginBottom: Spacing.md,
-      flexDirection: "row",
-      justifyContent: "space-between",
-      alignItems: "center",
+      // Clips the cover photo (and the scrim) to the card's rounded corners.
+      overflow: "hidden",
       ...Elevation.sm,
     },
     // A trip someone shared with you. Violet rather than any blue: the
@@ -1043,12 +1065,30 @@ const makeStyles = (colors: ThemeColors) =>
       borderLeftWidth: 4,
       borderLeftColor: colors.shared,
     },
-    tripCover: {
-      width: 56,
-      height: 56,
-      borderRadius: Radius.md,
-      marginRight: Spacing.md,
-      backgroundColor: colors.surfaceSunken,
+    // The card's own background/padding move here so the cover photo (or the
+    // plain-colour fallback for a trip without one) can fill the whole card;
+    // `tripCard` itself only owns the outer shape (radius, margin, overflow).
+    tripCardBackground: {
+      flex: 1,
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      padding: Spacing.lg,
+      minHeight: 96,
+      backgroundColor: colors.surface,
+    },
+    tripCardBackgroundImage: {
+      borderRadius: Radius.lg,
+    },
+    // Keeps title/date readable over a photo of any brightness, without
+    // needing to sample the image's own colours.
+    tripCardScrim: {
+      position: "absolute",
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: "rgba(0,0,0,0.38)",
     },
     // Past trips recede so upcoming ones read as the active content.
     tripCardPast: { opacity: 0.65 },
@@ -1146,12 +1186,13 @@ const makeStyles = (colors: ThemeColors) =>
       color: colors.textSecondary,
       marginTop: Spacing.xs,
     },
-    creditText: {
-      fontSize: FontSize.tiny,
-      fontFamily: FontFamily.regular,
-      color: colors.textDisabled,
-      marginTop: Spacing.xs,
-    },
+    // Fixed light colours rather than theme tokens: this text sits on an
+    // arbitrary photo, not the app's own surface, so it should not change
+    // with light/dark mode the way the rest of the card does.
+    locationTextOnCover: { color: "#FFFFFF" },
+    tripTitleOnCover: { color: "#FFFFFF" },
+    dateTextOnCover: { color: "rgba(255,255,255,0.85)" },
+    sharedByTextOnCover: { color: "rgba(255,255,255,0.85)" },
     badge: {
       backgroundColor: colors.primarySoft,
       paddingHorizontal: Spacing.sm,

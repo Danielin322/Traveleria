@@ -25,7 +25,7 @@ import httpx
 from botocore.config import Config
 
 from shared.auth import get_current_user
-from shared.cover_image import get_or_create_cover_slug
+from shared.cover_image import get_or_create_cover_id
 from shared.database import get_db
 from shared.response import error, success
 from shared.utils import (
@@ -130,8 +130,9 @@ def _get_trips(current_user):
         #
         # events_count lets the delete confirmation name what is about to go
         # with the trip. collaborators_count and role decide the card's badge.
-        # cover_image_url/credit_name/credit_url come from the destination's
-        # cached cover photo, shared across every trip to that destination.
+        # cover_image_url/credit_name/credit_url come from the specific cover
+        # photo this trip was assigned (see get_or_create_cover_id) — a second
+        # trip to the same destination can have a different one.
         db.execute(
             f"""
             SELECT trips.id, trips.title, trips.location,
@@ -153,7 +154,7 @@ def _get_trips(current_user):
                       AND tc3.status = 'active') AS membership_id
             FROM trips
             JOIN users owner ON owner.id = trips.owner_user_id
-            LEFT JOIN destination_covers dc ON dc.slug = trips.destination_slug
+            LEFT JOIN destination_covers dc ON dc.id = trips.destination_cover_id
             WHERE {TRIP_ACCESS_PREDICATE}
             ORDER BY trips.created_at DESC
             """,
@@ -179,19 +180,19 @@ def _create_trip(event, current_user):
     body = parse_body(event)
     start_date, end_date = parse_trip_dates(body.get("date", ""))
     with get_db() as db:
-        destination_slug = get_or_create_cover_slug(db, body["location"])
+        destination_cover_id = get_or_create_cover_id(db, body["location"], current_user["id"])
         db.execute(
             """
             WITH new_trip AS (
-                INSERT INTO trips (owner_user_id, title, location, start_date, end_date, destination_slug)
+                INSERT INTO trips (owner_user_id, title, location, start_date, end_date, destination_cover_id)
                 VALUES (%s, %s, %s, %s, %s, %s)
-                RETURNING id, title, location, start_date, end_date, destination_slug
+                RETURNING id, title, location, start_date, end_date, destination_cover_id
             )
             SELECT nt.*, dc.cover_image_url, dc.credit_name, dc.credit_url
             FROM new_trip nt
-            LEFT JOIN destination_covers dc ON dc.slug = nt.destination_slug
+            LEFT JOIN destination_covers dc ON dc.id = nt.destination_cover_id
             """,
-            (current_user["id"], body["title"], body["location"], start_date, end_date, destination_slug),
+            (current_user["id"], body["title"], body["location"], start_date, end_date, destination_cover_id),
         )
         return success({"message": "Trip added successfully", "trip": serialize_trip(db.fetchone())}, status=201)
 
@@ -207,23 +208,26 @@ def _update_trip(event, current_user):
         # definition and it lives in shared/utils.py.
         require_trip_access(db, trip_uuid, current_user["id"])
 
-        # A destination change re-resolves the cover; an unchanged destination
-        # just re-derives the same slug and hits the destination_covers cache.
-        destination_slug = get_or_create_cover_slug(db, body["location"])
+        # A destination change gets a cover not already used by another trip;
+        # an unchanged destination keeps this trip's own current cover, since
+        # it is excluded from that "already used" check.
+        destination_cover_id = get_or_create_cover_id(
+            db, body["location"], current_user["id"], exclude_trip_id=trip_uuid
+        )
 
         db.execute(
             """
             WITH updated_trip AS (
                 UPDATE trips SET title=%s, location=%s, start_date=%s, end_date=%s,
-                                  destination_slug=%s, updated_at=NOW()
+                                  destination_cover_id=%s, updated_at=NOW()
                 WHERE id=%s
-                RETURNING id, title, location, start_date, end_date, destination_slug
+                RETURNING id, title, location, start_date, end_date, destination_cover_id
             )
             SELECT ut.*, dc.cover_image_url, dc.credit_name, dc.credit_url
             FROM updated_trip ut
-            LEFT JOIN destination_covers dc ON dc.slug = ut.destination_slug
+            LEFT JOIN destination_covers dc ON dc.id = ut.destination_cover_id
             """,
-            (body["title"], body["location"], start_date, end_date, destination_slug, trip_uuid),
+            (body["title"], body["location"], start_date, end_date, destination_cover_id, trip_uuid),
         )
         row = db.fetchone()
 
@@ -613,7 +617,7 @@ def _respond_to_invitation(event, current_user):
                        AS collaborators_count
             FROM trips
             JOIN users owner ON owner.id = trips.owner_user_id
-            LEFT JOIN destination_covers dc ON dc.slug = trips.destination_slug
+            LEFT JOIN destination_covers dc ON dc.id = trips.destination_cover_id
             WHERE trips.id = %s
             """,
             (row["trip_id"],),

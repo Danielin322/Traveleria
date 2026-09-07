@@ -89,6 +89,11 @@ ensure_method "$TRIP_ID" "PUT"    "traveleria-trips" "/trips/{trip_id}"
 ensure_method "$TRIP_ID" "DELETE" "traveleria-trips" "/trips/{trip_id}"
 
 echo ""
+echo "Destination autocomplete:"
+AUTOCOMPLETE_ID=$(ensure_resource "/trips" "autocomplete")
+ensure_method "$AUTOCOMPLETE_ID" "GET" "traveleria-trips" "/trips/autocomplete"
+
+echo ""
 echo "Trip co-editing:"
 COLLABS_ID=$(ensure_resource "/trips/{trip_id}" "collaborators")
 COLLAB_ID=$(ensure_resource "/trips/{trip_id}/collaborators" "{collaborator_id}")

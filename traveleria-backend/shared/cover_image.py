@@ -1,13 +1,18 @@
 """
-Destination cover photos, cached once per destination in `destination_covers`
-and reused by every trip that shares it (see photo_cover.md). A cache miss
-fetches one Pexels photo, re-hosts it in S3, and upserts the cache row;
-Pexels is never called again for that destination afterwards.
+Destination cover photos. Each destination (by slug) can hold a pool of
+several cover photos in `destination_covers` rather than exactly one — a trip
+is assigned a cover not already used by another of the *same user's* existing
+trips to that destination, so a second trip you make to a place you've
+already been to gets a different photo instead of sharing the first one.
+Different users can still land on the same photo for the same destination —
+only your own trips compete with each other for the pool. A cache miss (every
+pool photo already taken by you, or there are none yet) fetches one more from
+Pexels and re-hosts it in S3.
 
-Pexels's license permits permanent caching/rehosting without attribution, so
-unlike some other stock photo APIs there is no required credit or download
-trigger here — `credit_name`/`credit_url` are stored purely as a nice-to-have
-for the UI.
+Pexels's license permits caching/rehosting images indefinitely without
+attribution, so unlike some other stock photo APIs there is no required
+credit or download trigger here — `credit_name`/`credit_url` are stored but
+not shown in the UI.
 
 Never raises: any failure (missing config, network, Pexels quota, S3) falls
 back to a shared default cover rather than blocking trip creation.
@@ -71,34 +76,60 @@ def _fetch_pexels_photo(destination: str):
 
 
 def _ensure_fallback(db) -> str:
+    """Returns the id of the shared fallback cover row, creating it once if missing."""
+    db.execute("SELECT id FROM destination_covers WHERE slug = %s LIMIT 1", (FALLBACK_SLUG,))
+    row = db.fetchone()
+    if row:
+        return row["id"]
     db.execute(
-        """
-        INSERT INTO destination_covers (slug, cover_image_url)
-        VALUES (%s, %s)
-        ON CONFLICT (slug) DO NOTHING
-        """,
+        "INSERT INTO destination_covers (slug, cover_image_url) VALUES (%s, %s) RETURNING id",
         (FALLBACK_SLUG, _bucket_url(FALLBACK_KEY)),
     )
-    return FALLBACK_SLUG
+    return db.fetchone()["id"]
 
 
-def get_or_create_cover_slug(db, destination: str) -> str:
-    """Resolves a destination to its `destination_covers.slug`, populating the cache on a miss."""
+def get_or_create_cover_id(db, destination: str, owner_user_id, exclude_trip_id=None):
+    """
+    Resolves a destination to a `destination_covers.id`, assigning a cover not
+    already used by another of `owner_user_id`'s own existing trips to the
+    same destination. Other users' trips are not considered — only this
+    user's trips compete with each other for the pool.
+
+    `exclude_trip_id` is the trip being updated (so its own current cover
+    still counts as "available" to it when the destination has not changed,
+    rather than being bumped to a new photo on every unrelated edit) — omit
+    it when creating a new trip, which cannot already own a cover.
+    """
     if not destination or not BUCKET:
         return _ensure_fallback(db)
 
     slug = _slugify(destination)
 
-    db.execute("SELECT 1 FROM destination_covers WHERE slug = %s", (slug,))
-    if db.fetchone():
-        return slug
+    db.execute(
+        """
+        SELECT dc.id FROM destination_covers dc
+        WHERE dc.slug = %(slug)s
+          AND NOT EXISTS (
+              SELECT 1 FROM trips t
+              WHERE t.destination_cover_id = dc.id
+                AND t.owner_user_id = %(owner_user_id)s
+                AND t.id IS DISTINCT FROM %(exclude_trip_id)s
+          )
+        ORDER BY dc.created_at
+        LIMIT 1
+        """,
+        {"slug": slug, "owner_user_id": owner_user_id, "exclude_trip_id": exclude_trip_id},
+    )
+    row = db.fetchone()
+    if row:
+        return row["id"]
 
     fetched = _fetch_pexels_photo(destination)
     if not fetched:
         return _ensure_fallback(db)
 
     image_bytes, credit_name, credit_url, photo_id = fetched
-    key = f"covers/destinations/{slug}.jpg"
+    key = f"covers/destinations/{slug}/{photo_id}.jpg"
 
     try:
         _s3.put_object(Bucket=BUCKET, Key=key, Body=image_bytes, ContentType="image/jpeg")
@@ -109,12 +140,8 @@ def get_or_create_cover_slug(db, destination: str) -> str:
         """
         INSERT INTO destination_covers (slug, cover_image_url, credit_name, credit_url, photo_id)
         VALUES (%s, %s, %s, %s, %s)
-        ON CONFLICT (slug) DO UPDATE SET
-            cover_image_url = EXCLUDED.cover_image_url,
-            credit_name = EXCLUDED.credit_name,
-            credit_url = EXCLUDED.credit_url,
-            photo_id = EXCLUDED.photo_id
+        RETURNING id
         """,
         (slug, _bucket_url(key), credit_name, credit_url, photo_id),
     )
-    return slug
+    return db.fetchone()["id"]
