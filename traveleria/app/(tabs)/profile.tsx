@@ -32,7 +32,12 @@ import {
 import { ThemeMode, useTheme } from "../../contexts/ThemeContext";
 import { apiFetch } from "../../services/apiClient";
 import { signOutUser } from "../../services/authService";
+import { getUserProfile } from "../../services/socialService";
 import { uploadAvatar } from "../../services/walletService";
+import {
+  PeopleListKind,
+  PeopleListModal,
+} from "../../components/social/PeopleListModal";
 
 const THEME_OPTIONS = [
   { value: "light", label: "Light" },
@@ -65,12 +70,34 @@ export default function ProfileScreen() {
     dietary: [] as string[],
   });
 
-  const fetchProfile = async () => {
+  // Follow counts live in the social Lambda, not /users/me, so they are
+  // fetched separately once that call has told us who we are.
+  const [myId, setMyId] = useState<string | null>(null);
+  const [followersCount, setFollowersCount] = useState(0);
+  const [followingCount, setFollowingCount] = useState(0);
+  const [peopleList, setPeopleList] = useState<PeopleListKind | null>(null);
+
+  const fetchFollowCounts = useCallback(async (userId: string) => {
+    try {
+      const profile = await getUserProfile(userId);
+      setFollowersCount(profile.followersCount);
+      setFollowingCount(profile.followingCount);
+    } catch {
+      // Non-fatal: the rest of the profile still renders, the counts just
+      // stay at whatever was last loaded.
+    }
+  }, []);
+
+  const fetchProfile = useCallback(async () => {
     try {
       setError(null);
       const response = await apiFetch("/users/me");
       if (!response.ok) throw new Error(`Request failed (${response.status})`);
       const data = await response.json();
+      if (data.id) {
+        setMyId(data.id);
+        fetchFollowCounts(data.id);
+      }
       setUserData({
         fullName: data.full_name || "",
         country: data.country || "",
@@ -92,7 +119,7 @@ export default function ProfileScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [fetchFollowCounts]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -102,7 +129,7 @@ export default function ProfileScreen() {
 
   useFocusEffect(useCallback(() => {
     fetchProfile();
-  }, []));
+  }, [fetchProfile]));
 
   const handleChangePhoto = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -185,6 +212,7 @@ export default function ProfileScreen() {
   }
 
   return (
+    <>
     <ScrollView
       style={styles.container}
       refreshControl={
@@ -247,6 +275,26 @@ export default function ProfileScreen() {
           <Text style={styles.statNumber}>{userData.tripsCount}</Text>
           <Text style={styles.statLabel}>Trips</Text>
         </View>
+        <TouchableOpacity
+          style={styles.statBox}
+          onPress={() => setPeopleList("followers")}
+          disabled={!myId}
+          accessibilityRole="button"
+          accessibilityLabel="See your followers"
+        >
+          <Text style={styles.statNumber}>{followersCount}</Text>
+          <Text style={styles.statLabel}>Followers</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.statBox}
+          onPress={() => setPeopleList("following")}
+          disabled={!myId}
+          accessibilityRole="button"
+          accessibilityLabel="See who you follow"
+        >
+          <Text style={styles.statNumber}>{followingCount}</Text>
+          <Text style={styles.statLabel}>Following</Text>
+        </TouchableOpacity>
       </View>
 
       <View style={styles.infoSection}>
@@ -361,6 +409,19 @@ export default function ProfileScreen() {
         )}
       </TouchableOpacity>
     </ScrollView>
+
+      {peopleList && myId && (
+        <PeopleListModal
+          kind={peopleList}
+          userId={myId}
+          onClose={() => setPeopleList(null)}
+          onSelectUser={(id) =>
+            router.push({ pathname: "/user-profile", params: { id } })
+          }
+          onFollowChanged={() => fetchFollowCounts(myId)}
+        />
+      )}
+    </>
   );
 }
 

@@ -253,6 +253,8 @@ SOCIAL_USERS_ID=$(make_resource  "$SOCIAL_ID" "users")
 SOCIAL_USER_ID=$(make_resource   "$SOCIAL_USERS_ID" "{user_id}")
 FOLLOW_ID=$(make_resource        "$SOCIAL_USER_ID" "follow")
 USER_POSTS_ID=$(make_resource    "$SOCIAL_USER_ID" "posts")
+FOLLOWERS_ID=$(make_resource     "$SOCIAL_USER_ID" "followers")
+FOLLOWING_ID=$(make_resource     "$SOCIAL_USER_ID" "following")
 SHARED_TRIPS_ID=$(make_resource  "$SOCIAL_ID" "shared-trips")
 SHARED_TRIP_ID=$(make_resource   "$SHARED_TRIPS_ID" "{trip_id}")
 SHARED_TRIP_COPY_ID=$(make_resource "$SHARED_TRIP_ID" "copy")
@@ -295,6 +297,8 @@ add_method "$SOCIAL_USER_ID"    "GET"    "traveleria-social"
 add_method "$FOLLOW_ID"         "POST"   "traveleria-social"
 add_method "$FOLLOW_ID"         "DELETE" "traveleria-social"
 add_method "$USER_POSTS_ID"     "GET"    "traveleria-social"
+add_method "$FOLLOWERS_ID"      "GET"    "traveleria-social"
+add_method "$FOLLOWING_ID"      "GET"    "traveleria-social"
 add_method "$SHARED_TRIP_ID"       "GET"  "traveleria-social"
 add_method "$SHARED_TRIP_COPY_ID"  "POST" "traveleria-social"
 

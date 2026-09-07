@@ -87,6 +87,12 @@ def lambda_handler(event, context):
         elif resource == "/social/users/{user_id}/posts":
             if method == "GET":
                 return _get_user_posts(event, current_user)
+        elif resource == "/social/users/{user_id}/followers":
+            if method == "GET":
+                return _list_followers(event, current_user)
+        elif resource == "/social/users/{user_id}/following":
+            if method == "GET":
+                return _list_following(event, current_user)
         elif resource == "/social/shared-trips/{trip_id}":
             if method == "GET":
                 return _get_shared_trip(event, current_user)
@@ -592,6 +598,62 @@ def _get_user_profile(event, current_user):
 def _get_user_posts(event, current_user):
     user_uuid = parse_uuid((event.get("pathParameters") or {}).get("user_id", ""), "user_id")
     return _list_posts(current_user, author_id=user_uuid)
+
+
+def _list_follow_connections(event, current_user, direction):
+    """
+    The people following user_id, or the people user_id follows.
+
+    `direction` picks which side of `follows` is the listed person: "followers"
+    joins on follower_id, "following" on followed_id. Each row carries the
+    *caller's* own isFollowing for that person -- not the subject's -- so the
+    list can offer a Follow button that means what it says when you are looking
+    at someone else's followers.
+    """
+    user_uuid = parse_uuid((event.get("pathParameters") or {}).get("user_id", ""), "user_id")
+
+    if direction == "followers":
+        join_column, match_column = "f.follower_id", "f.followed_id"
+    else:
+        join_column, match_column = "f.followed_id", "f.follower_id"
+
+    with get_db() as db:
+        db.execute("SELECT id FROM users WHERE id = %s", (user_uuid,))
+        if not db.fetchone():
+            raise AppError("User not found", status=404)
+
+        db.execute(
+            f"""
+            SELECT u.id, u.full_name, u.email, u.avatar_s3_key,
+                   EXISTS(
+                       SELECT 1 FROM follows
+                       WHERE follower_id = %s AND followed_id = u.id
+                   ) AS is_following
+            FROM follows f
+            JOIN users u ON u.id = {join_column}
+            WHERE {match_column} = %s
+            ORDER BY f.created_at DESC
+            """,
+            (current_user["id"], user_uuid),
+        )
+        rows = db.fetchall()
+
+    return success([
+        {
+            **_serialize_user(row["id"], row["full_name"], row["email"], row["avatar_s3_key"]),
+            "isFollowing": row["is_following"],
+            "isMe": row["id"] == current_user["id"],
+        }
+        for row in rows
+    ])
+
+
+def _list_followers(event, current_user):
+    return _list_follow_connections(event, current_user, "followers")
+
+
+def _list_following(event, current_user):
+    return _list_follow_connections(event, current_user, "following")
 
 
 def _follow_user(event, current_user):
