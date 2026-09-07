@@ -69,6 +69,14 @@ export type PersonListItem = SocialUser & {
   followersCount: number;
 };
 
+/** An entry in a followers / following list. */
+export type FollowConnection = SocialUser & {
+  /** Whether *you* follow this person. */
+  isFollowing: boolean;
+  /** Whether this person is you — the list hides its Follow button then. */
+  isMe: boolean;
+};
+
 /** Pulls the server's own message out of a failed response. */
 async function failureReason(response: Response, fallback: string) {
   try {
@@ -238,6 +246,29 @@ export async function getUserPosts(userId: string): Promise<Post[]> {
   const response = await apiFetch(`/social/users/${userId}/posts`);
   if (!response.ok) {
     throw new Error(await failureReason(response, "Could not load their posts."));
+  }
+  return response.json();
+}
+
+/**
+ * Who follows this user, and who this user follows.
+ *
+ * isFollowing is the *caller's* relationship to each person listed, not the
+ * subject's, so a Follow button in the list means what it says even when you
+ * are looking at somebody else's followers.
+ */
+export async function getFollowers(userId: string): Promise<FollowConnection[]> {
+  const response = await apiFetch(`/social/users/${userId}/followers`);
+  if (!response.ok) {
+    throw new Error(await failureReason(response, "Could not load followers."));
+  }
+  return response.json();
+}
+
+export async function getFollowing(userId: string): Promise<FollowConnection[]> {
+  const response = await apiFetch(`/social/users/${userId}/following`);
+  if (!response.ok) {
+    throw new Error(await failureReason(response, "Could not load following."));
   }
   return response.json();
 }

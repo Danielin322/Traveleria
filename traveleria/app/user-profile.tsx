@@ -13,7 +13,6 @@ import {
 } from "react-native";
 
 import {
-  Elevation,
   FontFamily,
   FontSize,
   Radius,
@@ -24,23 +23,25 @@ import { useThemeColors } from "../contexts/ThemeContext";
 import {
   Post,
   PublicProfile,
+  SocialUser,
+  addComment,
+  deleteComment as deleteCommentApi,
   followUser,
   getUserPosts,
   getUserProfile,
+  likePost,
   unfollowUser,
+  unlikePost,
 } from "../services/socialService";
-
-function timeAgo(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const m = Math.floor(diff / 60000);
-  if (m < 1) return "just now";
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
-  const d = Math.floor(h / 24);
-  if (d < 7) return `${d}d`;
-  return new Date(iso).toLocaleDateString();
-}
+import { apiFetch } from "../services/apiClient";
+import { CommentsSheet } from "../components/social/CommentsSheet";
+import { ImagePreviewModal } from "../components/social/ImagePreviewModal";
+import { LikesModal } from "../components/social/LikesModal";
+import { PostCard } from "../components/social/PostCard";
+import {
+  PeopleListKind,
+  PeopleListModal,
+} from "../components/social/PeopleListModal";
 
 export default function UserProfileScreen() {
   const router = useRouter();
@@ -50,11 +51,27 @@ export default function UserProfileScreen() {
   const colors = useThemeColors();
   const styles = useMemo(() => makeStyles(colors), [colors]);
 
+  const goToProfile = (id: string) =>
+    router.push({ pathname: "/user-profile", params: { id } });
+
   const [profile, setProfile] = useState<PublicProfile | null>(null);
   const [posts, setPosts] = useState<Post[]>([]);
+  const [myId, setMyId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [followBusy, setFollowBusy] = useState(false);
+
+  const [likesModalUsers, setLikesModalUsers] = useState<SocialUser[] | null>(
+    null
+  );
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [commentsPostId, setCommentsPostId] = useState<string | null>(null);
+  const [peopleList, setPeopleList] = useState<PeopleListKind | null>(null);
+
+  const activePost = useMemo(
+    () => posts.find((p) => p.id === commentsPostId) ?? null,
+    [posts, commentsPostId]
+  );
 
   const load = useCallback(async () => {
     if (!userId) return;
@@ -75,10 +92,82 @@ export default function UserProfileScreen() {
     }
   }, [userId]);
 
+  // Needed for "did I like this" and "is this my comment" — the profile being
+  // viewed is often someone else's, so profile.id is not the caller's id.
+  const fetchMyId = useCallback(async () => {
+    try {
+      const response = await apiFetch("/users/me");
+      if (response.ok) {
+        const data = await response.json();
+        setMyId(data.id ?? null);
+      }
+    } catch {
+      // Non-fatal: those checks just won't match until this loads.
+    }
+  }, []);
+
+  const refreshPosts = useCallback(async () => {
+    if (!userId) return;
+    setPosts(await getUserPosts(userId));
+  }, [userId]);
+
+  const toggleLike = async (post: Post) => {
+    if (!myId) return;
+    const alreadyLiked = post.likes.some((u) => u.id === myId);
+    try {
+      if (alreadyLiked) {
+        await unlikePost(post.id);
+      } else {
+        await likePost(post.id);
+      }
+      await refreshPosts();
+    } catch (err) {
+      Alert.alert(
+        "Could not update like",
+        err instanceof Error ? err.message : "Please try again."
+      );
+    }
+  };
+
+  const submitComment = async (text: string, parentCommentId?: string) => {
+    if (!commentsPostId) return;
+    try {
+      await addComment(commentsPostId, text, parentCommentId);
+      await refreshPosts();
+    } catch (err) {
+      Alert.alert(
+        "Could not post comment",
+        err instanceof Error ? err.message : "Please try again."
+      );
+    }
+  };
+
+  const removeComment = (commentId: string) => {
+    Alert.alert("Delete comment?", "", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            await deleteCommentApi(commentId);
+            await refreshPosts();
+          } catch (err) {
+            Alert.alert(
+              "Could not delete",
+              err instanceof Error ? err.message : "Please try again."
+            );
+          }
+        },
+      },
+    ]);
+  };
+
   useFocusEffect(
     useCallback(() => {
       load();
-    }, [load])
+      fetchMyId();
+    }, [load, fetchMyId])
   );
 
   const toggleFollow = async () => {
@@ -161,14 +250,24 @@ export default function UserProfileScreen() {
                   <Text style={styles.statNumber}>{profile.postsCount}</Text>
                   <Text style={styles.statLabel}>Posts</Text>
                 </View>
-                <View style={styles.statItem}>
+                <TouchableOpacity
+                  style={styles.statItem}
+                  onPress={() => setPeopleList("followers")}
+                  accessibilityRole="button"
+                  accessibilityLabel="See followers"
+                >
                   <Text style={styles.statNumber}>{profile.followersCount}</Text>
                   <Text style={styles.statLabel}>Followers</Text>
-                </View>
-                <View style={styles.statItem}>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.statItem}
+                  onPress={() => setPeopleList("following")}
+                  accessibilityRole="button"
+                  accessibilityLabel="See who they follow"
+                >
                   <Text style={styles.statNumber}>{profile.followingCount}</Text>
                   <Text style={styles.statLabel}>Following</Text>
-                </View>
+                </TouchableOpacity>
               </View>
 
               {!profile.isMe && (
@@ -205,30 +304,54 @@ export default function UserProfileScreen() {
           ) : null
         }
         renderItem={({ item }) => (
-          <View style={styles.postCard}>
-            <Text style={styles.postTime}>{timeAgo(item.createdAt)}</Text>
-            {item.text ? <Text style={styles.postText}>{item.text}</Text> : null}
-            {item.imageUri ? (
-              <Image source={{ uri: item.imageUri }} style={styles.postImage} />
-            ) : null}
-            <View style={styles.postMetaRow}>
-              <Ionicons name="heart-outline" size={16} color={colors.textMuted} />
-              <Text style={styles.postMetaText}>{item.likes.length}</Text>
-              <Ionicons
-                name="chatbubble-outline"
-                size={16}
-                color={colors.textMuted}
-                style={{ marginLeft: 14 }}
-              />
-              <Text style={styles.postMetaText}>
-                {item.comments.length +
-                  item.comments.reduce((sum, c) => sum + c.replies.length, 0)}
-              </Text>
-            </View>
-          </View>
+          <PostCard
+            post={item}
+            myId={myId}
+            onToggleLike={toggleLike}
+            onOpenComments={setCommentsPostId}
+            onOpenLikes={setLikesModalUsers}
+            onPressImage={setPreviewImage}
+            onGoToProfile={goToProfile}
+            onPressSharedTrip={(tripId) =>
+              router.push({
+                pathname: "/shared-trip-view",
+                params: { id: tripId },
+              })
+            }
+          />
         )}
         ListEmptyComponent={<Text style={styles.emptyText}>No posts yet.</Text>}
       />
+
+      <ImagePreviewModal
+        uri={previewImage}
+        onClose={() => setPreviewImage(null)}
+      />
+
+      <LikesModal
+        users={likesModalUsers}
+        onClose={() => setLikesModalUsers(null)}
+        onSelectUser={goToProfile}
+      />
+
+      <CommentsSheet
+        post={activePost}
+        myId={myId}
+        onClose={() => setCommentsPostId(null)}
+        onSubmit={submitComment}
+        onDeleteComment={removeComment}
+        onGoToProfile={goToProfile}
+      />
+
+      {peopleList && (
+        <PeopleListModal
+          kind={peopleList}
+          userId={userId}
+          onClose={() => setPeopleList(null)}
+          onSelectUser={goToProfile}
+          onFollowChanged={load}
+        />
+      )}
     </View>
   );
 }
@@ -327,37 +450,6 @@ const makeStyles = (colors: ThemeColors) =>
       color: colors.textMuted,
       marginTop: Spacing.md,
       marginBottom: Spacing.sm,
-    },
-    postCard: {
-      backgroundColor: colors.surface,
-      borderRadius: Radius.lg,
-      padding: Spacing.lg,
-      marginHorizontal: Spacing.xl,
-      marginBottom: Spacing.md,
-      ...Elevation.sm,
-    },
-    postTime: {
-      fontSize: FontSize.tiny,
-      color: colors.textMuted,
-      marginBottom: Spacing.xs,
-    },
-    postText: {
-      fontSize: FontSize.small,
-      color: colors.textPrimary,
-      marginBottom: Spacing.sm,
-    },
-    postImage: {
-      width: "100%",
-      height: 200,
-      borderRadius: Radius.md,
-      backgroundColor: colors.border,
-      marginBottom: Spacing.sm,
-    },
-    postMetaRow: { flexDirection: "row", alignItems: "center" },
-    postMetaText: {
-      fontSize: FontSize.caption,
-      color: colors.textMuted,
-      marginLeft: 4,
     },
     emptyText: {
       textAlign: "center",

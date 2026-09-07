@@ -1,4 +1,4 @@
-"""Local dev server that emulates API Gateway + the 5 Lambda functions.
+"""Local dev server that emulates API Gateway + the Lambda functions.
 
 Not used in production/deployment — deploy_cloudshell.sh still deploys the
 real Lambdas. This just lets you hit the same handler code over plain HTTP
@@ -20,6 +20,7 @@ from lambdas.trips.handler import lambda_handler as trips_handler
 from lambdas.itinerary.handler import lambda_handler as itinerary_handler
 from lambdas.users.handler import lambda_handler as users_handler
 from lambdas.chat.handler import lambda_handler as chat_handler
+from lambdas.social.handler import lambda_handler as social_handler
 
 # (method, path regex, handler, API Gateway "resource" template, path param names)
 ROUTES = [
@@ -52,6 +53,39 @@ ROUTES = [
     ("PATCH", re.compile(r"^/users/me$"), users_handler, "/users/me", []),
     ("GET", re.compile(r"^/chat$"), chat_handler, "/chat", []),
     ("POST", re.compile(r"^/chat$"), chat_handler, "/chat", []),
+    # Social. The wallet routes are still missing here (they need real S3, so
+    # they have to be tested against the deployed API), but these do not.
+    ("GET", re.compile(r"^/social/posts$"), social_handler, "/social/posts", []),
+    ("POST", re.compile(r"^/social/posts$"), social_handler, "/social/posts", []),
+    ("PUT", re.compile(r"^/social/posts/([^/]+)$"), social_handler,
+     "/social/posts/{post_id}", ["post_id"]),
+    ("DELETE", re.compile(r"^/social/posts/([^/]+)$"), social_handler,
+     "/social/posts/{post_id}", ["post_id"]),
+    ("POST", re.compile(r"^/social/posts/([^/]+)/like$"), social_handler,
+     "/social/posts/{post_id}/like", ["post_id"]),
+    ("DELETE", re.compile(r"^/social/posts/([^/]+)/like$"), social_handler,
+     "/social/posts/{post_id}/like", ["post_id"]),
+    ("POST", re.compile(r"^/social/posts/([^/]+)/comments$"), social_handler,
+     "/social/posts/{post_id}/comments", ["post_id"]),
+    ("DELETE", re.compile(r"^/social/comments/([^/]+)$"), social_handler,
+     "/social/comments/{comment_id}", ["comment_id"]),
+    ("GET", re.compile(r"^/social/people$"), social_handler, "/social/people", []),
+    ("GET", re.compile(r"^/social/users/([^/]+)$"), social_handler,
+     "/social/users/{user_id}", ["user_id"]),
+    ("POST", re.compile(r"^/social/users/([^/]+)/follow$"), social_handler,
+     "/social/users/{user_id}/follow", ["user_id"]),
+    ("DELETE", re.compile(r"^/social/users/([^/]+)/follow$"), social_handler,
+     "/social/users/{user_id}/follow", ["user_id"]),
+    ("GET", re.compile(r"^/social/users/([^/]+)/posts$"), social_handler,
+     "/social/users/{user_id}/posts", ["user_id"]),
+    ("GET", re.compile(r"^/social/users/([^/]+)/followers$"), social_handler,
+     "/social/users/{user_id}/followers", ["user_id"]),
+    ("GET", re.compile(r"^/social/users/([^/]+)/following$"), social_handler,
+     "/social/users/{user_id}/following", ["user_id"]),
+    ("GET", re.compile(r"^/social/shared-trips/([^/]+)$"), social_handler,
+     "/social/shared-trips/{trip_id}", ["trip_id"]),
+    ("POST", re.compile(r"^/social/shared-trips/([^/]+)/copy$"), social_handler,
+     "/social/shared-trips/{trip_id}/copy", ["trip_id"]),
 ]
 
 
