@@ -1,0 +1,170 @@
+"""Local dev server that emulates API Gateway + the Lambda functions.
+
+Not used in production/deployment — deploy_cloudshell.sh still deploys the
+real Lambdas. This just lets you hit the same handler code over plain HTTP
+while developing, using the same DATABASE_URL / Cognito config from .env.
+
+Run with:  python local_server.py
+"""
+import json
+import re
+import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from lambdas.health.handler import lambda_handler as health_handler
+from lambdas.trips.handler import lambda_handler as trips_handler
+from lambdas.itinerary.handler import lambda_handler as itinerary_handler
+from lambdas.users.handler import lambda_handler as users_handler
+from lambdas.chat.handler import lambda_handler as chat_handler
+from lambdas.social.handler import lambda_handler as social_handler
+
+# (method, path regex, handler, API Gateway "resource" template, path param names)
+ROUTES = [
+    ("GET", re.compile(r"^/$"), health_handler, "/", []),
+    ("GET", re.compile(r"^/trips$"), trips_handler, "/trips", []),
+    ("POST", re.compile(r"^/trips$"), trips_handler, "/trips", []),
+    ("GET", re.compile(r"^/trips/autocomplete$"), trips_handler, "/trips/autocomplete", []),
+    ("PUT", re.compile(r"^/trips/([^/]+)$"), trips_handler, "/trips/{trip_id}", ["trip_id"]),
+    ("DELETE", re.compile(r"^/trips/([^/]+)$"), trips_handler, "/trips/{trip_id}", ["trip_id"]),
+    ("GET", re.compile(r"^/trips/([^/]+)/itinerary$"), itinerary_handler,
+     "/trips/{trip_id}/itinerary", ["trip_id"]),
+    ("POST", re.compile(r"^/trips/([^/]+)/itinerary$"), itinerary_handler,
+     "/trips/{trip_id}/itinerary", ["trip_id"]),
+    ("PUT", re.compile(r"^/trips/([^/]+)/itinerary/([^/]+)$"), itinerary_handler,
+     "/trips/{trip_id}/itinerary/{event_id}", ["trip_id", "event_id"]),
+    ("DELETE", re.compile(r"^/trips/([^/]+)/itinerary/([^/]+)$"), itinerary_handler,
+     "/trips/{trip_id}/itinerary/{event_id}", ["trip_id", "event_id"]),
+    ("GET", re.compile(r"^/trips/([^/]+)/collaborators$"), trips_handler,
+     "/trips/{trip_id}/collaborators", ["trip_id"]),
+    ("POST", re.compile(r"^/trips/([^/]+)/collaborators$"), trips_handler,
+     "/trips/{trip_id}/collaborators", ["trip_id"]),
+    ("DELETE", re.compile(r"^/trips/([^/]+)/collaborators/([^/]+)$"), trips_handler,
+     "/trips/{trip_id}/collaborators/{collaborator_id}", ["trip_id", "collaborator_id"]),
+    ("PUT", re.compile(r"^/trips/([^/]+)/owner$"), trips_handler,
+     "/trips/{trip_id}/owner", ["trip_id"]),
+    ("GET", re.compile(r"^/invitations$"), trips_handler, "/invitations", []),
+    ("PUT", re.compile(r"^/invitations/([^/]+)$"), trips_handler,
+     "/invitations/{invitation_id}", ["invitation_id"]),
+    ("GET", re.compile(r"^/users/me$"), users_handler, "/users/me", []),
+    ("PATCH", re.compile(r"^/users/me$"), users_handler, "/users/me", []),
+    ("GET", re.compile(r"^/chat$"), chat_handler, "/chat", []),
+    ("POST", re.compile(r"^/chat$"), chat_handler, "/chat", []),
+    # Social. The wallet routes are still missing here (they need real S3, so
+    # they have to be tested against the deployed API), but these do not.
+    ("GET", re.compile(r"^/social/posts$"), social_handler, "/social/posts", []),
+    ("POST", re.compile(r"^/social/posts$"), social_handler, "/social/posts", []),
+    ("PUT", re.compile(r"^/social/posts/([^/]+)$"), social_handler,
+     "/social/posts/{post_id}", ["post_id"]),
+    ("DELETE", re.compile(r"^/social/posts/([^/]+)$"), social_handler,
+     "/social/posts/{post_id}", ["post_id"]),
+    ("POST", re.compile(r"^/social/posts/([^/]+)/like$"), social_handler,
+     "/social/posts/{post_id}/like", ["post_id"]),
+    ("DELETE", re.compile(r"^/social/posts/([^/]+)/like$"), social_handler,
+     "/social/posts/{post_id}/like", ["post_id"]),
+    ("POST", re.compile(r"^/social/posts/([^/]+)/comments$"), social_handler,
+     "/social/posts/{post_id}/comments", ["post_id"]),
+    ("DELETE", re.compile(r"^/social/comments/([^/]+)$"), social_handler,
+     "/social/comments/{comment_id}", ["comment_id"]),
+    ("GET", re.compile(r"^/social/people$"), social_handler, "/social/people", []),
+    ("GET", re.compile(r"^/social/users/([^/]+)$"), social_handler,
+     "/social/users/{user_id}", ["user_id"]),
+    ("POST", re.compile(r"^/social/users/([^/]+)/follow$"), social_handler,
+     "/social/users/{user_id}/follow", ["user_id"]),
+    ("DELETE", re.compile(r"^/social/users/([^/]+)/follow$"), social_handler,
+     "/social/users/{user_id}/follow", ["user_id"]),
+    ("GET", re.compile(r"^/social/users/([^/]+)/posts$"), social_handler,
+     "/social/users/{user_id}/posts", ["user_id"]),
+    ("GET", re.compile(r"^/social/users/([^/]+)/followers$"), social_handler,
+     "/social/users/{user_id}/followers", ["user_id"]),
+    ("GET", re.compile(r"^/social/users/([^/]+)/following$"), social_handler,
+     "/social/users/{user_id}/following", ["user_id"]),
+    ("GET", re.compile(r"^/social/shared-trips/([^/]+)$"), social_handler,
+     "/social/shared-trips/{trip_id}", ["trip_id"]),
+    ("POST", re.compile(r"^/social/shared-trips/([^/]+)/copy$"), social_handler,
+     "/social/shared-trips/{trip_id}/copy", ["trip_id"]),
+]
+
+
+class Handler(BaseHTTPRequestHandler):
+    def _dispatch(self, method):
+        parsed = urlsplit(self.path)
+        path = parsed.path
+        query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+        for route_method, pattern, fn, resource, param_names in ROUTES:
+            if route_method != method:
+                continue
+            match = pattern.match(path)
+            if not match:
+                continue
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            raw_body = self.rfile.read(length).decode("utf-8") if length else None
+            event = {
+                "httpMethod": method,
+                "resource": resource,
+                "path": path,
+                "pathParameters": dict(zip(param_names, match.groups())) or None,
+                "queryStringParameters": query or None,
+                "headers": dict(self.headers.items()),
+                "body": raw_body,
+            }
+            try:
+                result = fn(event, None)
+            except Exception as exc:
+                result = {
+                    "statusCode": 500,
+                    "headers": {"Content-Type": "application/json"},
+                    "body": json.dumps({"detail": str(exc)}),
+                }
+            self._send(result)
+            return
+        self._send({
+            "statusCode": 404,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps({"detail": f"No route for {method} {path}"}),
+        })
+
+    def _send(self, result):
+        body = (result.get("body") or "").encode("utf-8")
+        self.send_response(result.get("statusCode", 200))
+        for key, value in (result.get("headers") or {}).items():
+            self.send_header(key, value)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        self._dispatch("GET")
+
+    def do_POST(self):
+        self._dispatch("POST")
+
+    def do_PUT(self):
+        self._dispatch("PUT")
+
+    def do_PATCH(self):
+        self._dispatch("PATCH")
+
+    def do_DELETE(self):
+        self._dispatch("DELETE")
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "*")
+        self.send_header("Access-Control-Allow-Headers", "*")
+        self.end_headers()
+
+    def log_message(self, fmt, *args):
+        print(f"{self.address_string()} - {fmt % args}")
+
+
+if __name__ == "__main__":
+    PORT = 8000
+    print(f"Traveleria local dev server on http://localhost:{PORT}")
+    print("Routes: GET / | GET,POST /trips | GET /trips/autocomplete | GET,POST /trips/{trip_id}/itinerary | "
+          "PUT,DELETE /trips/{trip_id}/itinerary/{event_id} | GET,PATCH /users/me | POST /chat")
+    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

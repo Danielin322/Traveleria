@@ -1,0 +1,1334 @@
+import { Ionicons } from "@expo/vector-icons";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useMemo, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  ImageBackground,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  RefreshControl,
+  ScrollView,
+  SectionList,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
+
+import { AppButton } from "../../components/AppButton";
+import { DateRangePicker } from "../../components/DateRangePicker";
+import { FormField, useFieldStyles } from "../../components/FormField";
+import { API_URL } from "../../constants/api";
+import {
+  Elevation,
+  FontFamily,
+  FontSize,
+  Radius,
+  Spacing,
+  ThemeColors,
+} from "../../constants/theme";
+import { useThemeColors } from "../../contexts/ThemeContext";
+import { apiFetch } from "../../services/apiClient";
+import {
+  listInvitations,
+  listMembers,
+  removeMember,
+} from "../../services/tripSharingService";
+import {
+  formatTripBadge,
+  formatTripDates,
+  getTripStatus,
+  groupTripsByTime,
+} from "../../utils/tripFormat";
+import {
+  LIMITS,
+  formatDateRange,
+  parseDateRange,
+  validateDestination,
+  validateTripDates,
+  validateTripTitle,
+} from "../../utils/validation";
+
+type TripFieldErrors = {
+  title?: string;
+  location?: string;
+  dates?: string;
+};
+
+export default function HomeScreen() {
+  const [trips, setTrips] = useState<any[]>([]);
+  // Drives the badge on the bell. Kept as a count rather than the list itself:
+  // the Invitations screen fetches its own copy when it opens.
+  const [invitationCount, setInvitationCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const router = useRouter();
+  const colors = useThemeColors();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const fieldStyles = useFieldStyles();
+
+  const [isModalVisible, setIsModalVisible] = useState(false);
+  // Null while creating, the trip's id while editing — one modal serves both,
+  // the same way the event form in trip-details.tsx does.
+  const [editingTripId, setEditingTripId] = useState<string | null>(null);
+  const [newTitle, setNewTitle] = useState("");
+  const [newLocation, setNewLocation] = useState("");
+  const [startDate, setStartDate] = useState<Date | null>(null);
+  const [endDate, setEndDate] = useState<Date | null>(null);
+  const [isDatePickerVisible, setDatePickerVisible] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<TripFieldErrors>({});
+  const [addError, setAddError] = useState<string | null>(null);
+  // Guards against a double tap creating the same trip twice.
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const [destinationSuggestions, setDestinationSuggestions] = useState<
+    { placeId: string; description: string }[]
+  >([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  // Debounced so typing does not fire an autocomplete request per keystroke.
+  const autocompleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Upcoming trips first (soonest at the top), past trips below.
+  const sections = useMemo(() => {
+    const { upcoming, past } = groupTripsByTime(trips);
+    return [
+      ...(upcoming.length ? [{ title: "Upcoming", data: upcoming }] : []),
+      ...(past.length ? [{ title: "Past", data: past }] : []),
+    ];
+  }, [trips]);
+
+  const fetchTrips = useCallback(async () => {
+    if (!API_URL) {
+      setError(
+        "API URL is not configured. Please set EXPO_PUBLIC_API_URL in your .env file.",
+      );
+      setLoading(false);
+      return;
+    }
+    try {
+      setError(null);
+      const response = await apiFetch("/trips");
+      const data = await response.json();
+      setTrips(data);
+    } catch (err) {
+      setError(
+        "Could not connect to server. Make sure the backend is running.",
+      );
+      console.error("Error fetching trips:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  /**
+   * Best-effort: the bell is a shortcut to a screen the user can always reach,
+   * so a failure here costs the badge and nothing else. It must not be able to
+   * take the trip list down with it.
+   */
+  const fetchInvitationCount = useCallback(async () => {
+    try {
+      const invitations = await listInvitations();
+      setInvitationCount(invitations.length);
+    } catch {
+      setInvitationCount(0);
+    }
+  }, []);
+
+  /** Pull-to-refresh: reuses fetchTrips but drives the spinner in the list. */
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await Promise.all([fetchTrips(), fetchInvitationCount()]);
+    setRefreshing(false);
+  };
+
+  // Bulk edit: tick several trips, remove them together.
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+
+  const resetTripForm = () => {
+    setEditingTripId(null);
+    setNewTitle("");
+    setNewLocation("");
+    setStartDate(null);
+    setEndDate(null);
+    setFieldErrors({});
+    setAddError(null);
+    setDestinationSuggestions([]);
+    setShowSuggestions(false);
+  };
+
+  const fetchDestinationSuggestions = async (text: string) => {
+    if (!API_URL || text.trim().length < 2) {
+      setDestinationSuggestions([]);
+      return;
+    }
+    try {
+      const response = await apiFetch(
+        `/trips/autocomplete?q=${encodeURIComponent(text.trim())}`,
+      );
+      const data = await response.json();
+      setDestinationSuggestions(Array.isArray(data) ? data : []);
+    } catch {
+      // A failed autocomplete lookup just means no suggestions — the field
+      // still accepts free text, so this is not surfaced as an error.
+      setDestinationSuggestions([]);
+    }
+  };
+
+  const handleLocationChange = (text: string) => {
+    setNewLocation(text);
+    if (fieldErrors.location)
+      setFieldErrors((prev) => ({ ...prev, location: undefined }));
+    setShowSuggestions(true);
+    if (autocompleteTimer.current) clearTimeout(autocompleteTimer.current);
+    autocompleteTimer.current = setTimeout(
+      () => fetchDestinationSuggestions(text),
+      300,
+    );
+  };
+
+  const selectDestination = (description: string) => {
+    setNewLocation(description);
+    setDestinationSuggestions([]);
+    setShowSuggestions(false);
+  };
+
+  const closeTripModal = () => {
+    setIsModalVisible(false);
+    resetTripForm();
+  };
+
+  const handleConfirmDates = (start: Date, end: Date) => {
+    setStartDate(start);
+    setEndDate(end);
+    setFieldErrors((prev) => ({ ...prev, dates: undefined }));
+    setDatePickerVisible(false);
+  };
+
+  const openEditTrip = (trip: any) => {
+    const parsed = parseDateRange(trip.date);
+    setEditingTripId(trip.id);
+    setNewTitle(trip.title);
+    setNewLocation(trip.location);
+    setStartDate(parsed?.start ?? null);
+    setEndDate(parsed?.end ?? null);
+    setFieldErrors({});
+    setAddError(null);
+    setIsModalVisible(true);
+  };
+
+  const handleAddTrip = async () => {
+    // Ignore repeat taps while the first request is still in flight.
+    if (isSubmitting) return;
+
+    setAddError(null);
+
+    const errors: TripFieldErrors = {
+      title: validateTripTitle(newTitle) ?? undefined,
+      location: validateDestination(newLocation) ?? undefined,
+      dates: validateTripDates(startDate, endDate) ?? undefined,
+    };
+    setFieldErrors(errors);
+
+    // Bail out if any rule failed; the messages are already on screen.
+    if (errors.title || errors.location || errors.dates) return;
+
+    setIsSubmitting(true);
+    try {
+      const response = await apiFetch(
+        editingTripId ? `/trips/${editingTripId}` : "/trips",
+        {
+          method: editingTripId ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: newTitle.trim(),
+            // Non-null: validateTripDates above guarantees both dates are set.
+            date: formatDateRange(startDate!, endDate!),
+            location: newLocation.trim(),
+          }),
+        },
+      );
+
+      if (response.ok) {
+        // Narrowing the dates deletes nothing, but it can leave events outside
+        // the range. Say so rather than letting it be discovered later.
+        const data = await response.json().catch(() => null);
+        const outside = data?.events_outside_range ?? 0;
+        if (editingTripId && outside > 0) {
+          Alert.alert(
+            "Dates changed",
+            `${outside} ${outside === 1 ? "event falls" : "events fall"} outside the new dates. Nothing was deleted — they still appear in the daily plan under their own day.`,
+          );
+        }
+        fetchTrips();
+        setIsModalVisible(false);
+        resetTripForm();
+      } else {
+        const data = await response.json();
+        setAddError(
+          data?.detail ||
+            data?.error ||
+            `Failed to ${editingTripId ? "update" : "create"} trip.`,
+        );
+      }
+    } catch (err) {
+      setAddError("Could not connect to server.");
+      console.error("Error saving trip:", err);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  /* ---------------------------------------------------------------- */
+  /* Deleting trips                                                     */
+  /* ---------------------------------------------------------------- */
+
+  /** Leaving selection always drops the ticks, so no id can go stale. */
+  const exitSelection = () => {
+    setIsSelecting(false);
+    setSelectedIds(new Set());
+  };
+
+  /**
+   * Selection exists to delete trips, and a trip shared with you cannot be
+   * deleted — only left, which is a different act with a different warning.
+   * So selection covers owned trips only, and the bar says why the numbers do
+   * not match the list. Mixing delete and leave into one bulk action is a good
+   * way to lose a trip by accident.
+   *
+   * `role` is absent on responses from an API build that predates co-editing,
+   * which reads as owned — the behaviour there is exactly what it was.
+   */
+  /** Can you delete it, manage it, select it? Only the owner. */
+  const isOwnedTrip = (trip: any) => trip.role !== "editor";
+
+  /**
+   * Is more than one person on it? True on both sides — the owner needs to see
+   * that a trip is shared just as much as the person it was shared with, and
+   * from the owner's side the only evidence is the collaborator count.
+   * Counted from accepted invitations only, so a trip does not go violet on
+   * the strength of an invitation nobody has answered.
+   */
+  const isSharedTrip = (trip: any) =>
+    trip.role === "editor" || (trip.collaborators_count ?? 0) > 0;
+
+  const ownedTrips = useMemo(() => trips.filter(isOwnedTrip), [trips]);
+  const joinedCount = trips.length - ownedTrips.length;
+
+  const enterSelection = (trip: any) => {
+    if (!isOwnedTrip(trip)) return;
+    setIsSelecting(true);
+    setSelectedIds(new Set([trip.id]));
+  };
+
+  const toggleSelected = (trip: any) => {
+    if (!isOwnedTrip(trip)) return;
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(trip.id)) next.delete(trip.id);
+      else next.add(trip.id);
+      return next;
+    });
+  };
+
+  const allSelected =
+    ownedTrips.length > 0 && selectedIds.size === ownedTrips.length;
+
+  const toggleSelectAll = () =>
+    setSelectedIds(allSelected ? new Set() : new Set(ownedTrips.map((t) => t.id)));
+
+  /**
+   * Deletes the given ids and returns the failures, each with the server's
+   * own explanation. Reporting "could not be removed" without a reason makes
+   * a misconfigured backend look like a broken button.
+   */
+  const deleteTrips = async (ids: string[]) => {
+    const results = await Promise.allSettled(
+      ids.map((tripId) => apiFetch(`/trips/${tripId}`, { method: "DELETE" })),
+    );
+
+    const deleted = new Set<string>();
+    const failures: { id: string; reason: string }[] = [];
+
+    for (let i = 0; i < ids.length; i++) {
+      const result = results[i];
+
+      if (result.status === "rejected") {
+        failures.push({ id: ids[i], reason: "Could not reach the server." });
+        continue;
+      }
+
+      const response = result.value;
+      if (response.ok) {
+        deleted.add(ids[i]);
+        continue;
+      }
+
+      let detail = "";
+      try {
+        const body = await response.json();
+        detail = body?.detail || body?.error || body?.message || "";
+      } catch {
+        // Non-JSON error body; fall back to the status alone.
+      }
+
+      // API Gateway answers an unrouted path with 403 "Missing Authentication
+      // Token", which reads as an auth problem and is not one. Say what it
+      // actually means.
+      if (response.status === 403 && /missing authentication token/i.test(detail)) {
+        detail = "This route is not deployed on the API yet.";
+      }
+
+      failures.push({
+        id: ids[i],
+        reason: detail
+          ? `${detail} (HTTP ${response.status})`
+          : `The server returned HTTP ${response.status}.`,
+      });
+    }
+
+    setTrips((prev) => prev.filter((t) => !deleted.has(t.id)));
+    return failures;
+  };
+
+  /**
+   * A trip carries far more than a single event does, so the confirmation
+   * names it and counts what goes with it.
+   */
+  const handleDeleteTrip = (trip: any) => {
+    const n = trip.events_count ?? 0;
+    const others = trip.collaborators_count ?? 0;
+    // Deleting a shared trip takes it away from everyone on it, and the
+    // cascade removes each person's own chat history for it. That is a bigger
+    // thing than deleting a solo trip and should not be discovered afterwards.
+    const sharedWarning =
+      others > 0
+        ? ` It will also disappear for ${others === 1 ? "the other person" : `the ${others} other people`} on it, along with everyone's chat history for it.`
+        : "";
+    Alert.alert(
+      `Delete “${trip.title}”?`,
+      (n > 0
+        ? `Its ${n} ${n === 1 ? "event" : "events"} will be deleted too. This cannot be undone.`
+        : "This cannot be undone.") + sharedWarning,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const failed = await deleteTrips([trip.id]);
+              if (failed.length > 0) {
+                Alert.alert("Could not delete trip", failed[0].reason);
+              }
+            } catch (err) {
+              console.error("Error deleting trip:", err);
+              Alert.alert("Connection problem", "Could not reach the server.");
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  /**
+   * Leaving is the collaborator's version of deleting: it removes their own
+   * membership and nothing else. The membership id rides along on the trip
+   * list; the lookup is a fallback for an API build that does not send it yet.
+   */
+  const handleLeaveTrip = (trip: any) => {
+    Alert.alert(
+      `Leave “${trip.title}”?`,
+      "It will disappear from your trips, and you will need a new invitation to get back in. Nothing is deleted for anyone else.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Leave",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              let membershipId = trip.membership_id;
+              if (!membershipId) {
+                const members = await listMembers(trip.id);
+                membershipId = members.collaborators.find((m) => m.is_you)?.id;
+                if (!membershipId) {
+                  throw new Error("You are not listed on this trip.");
+                }
+              }
+              await removeMember(trip.id, membershipId);
+              setTrips((prev) => prev.filter((t) => t.id !== trip.id));
+            } catch (err: any) {
+              Alert.alert(
+                "Could not leave",
+                err?.message || "Could not reach the server.",
+              );
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const handleDeleteSelected = () => {
+    if (isBulkDeleting || selectedIds.size === 0) return;
+
+    const ids = [...selectedIds];
+    const totalEvents = trips
+      .filter((t) => ids.includes(t.id))
+      .reduce((sum, t) => sum + (t.events_count ?? 0), 0);
+
+    Alert.alert(
+      `Delete ${ids.length} ${ids.length === 1 ? "trip" : "trips"}?`,
+      totalEvents > 0
+        ? `${totalEvents} ${totalEvents === 1 ? "event" : "events"} will be deleted with them. This cannot be undone.`
+        : "This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            setIsBulkDeleting(true);
+            try {
+              const failed = await deleteTrips(ids);
+              if (failed.length > 0) {
+                // Keep failures ticked so a retry is one tap.
+                setSelectedIds(new Set(failed.map((f) => f.id)));
+                // Lead with why. When every failure shares a cause — which is
+                // usually the case — one reason explains the whole batch.
+                const reasons = [...new Set(failed.map((f) => f.reason))];
+                Alert.alert(
+                  failed.length === ids.length
+                    ? "Could not delete"
+                    : "Some trips were not deleted",
+                  reasons.length === 1
+                    ? reasons[0]
+                    : `${failed.length} of ${ids.length} failed:\n\n${reasons.join("\n")}`,
+                );
+              } else {
+                exitSelection();
+              }
+            } catch (err) {
+              console.error("Error deleting trips:", err);
+              Alert.alert("Connection problem", "Could not reach the server.");
+            } finally {
+              setIsBulkDeleting(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  // On focus rather than on mount: a co-editor's changes arrive between one
+  // look at this screen and the next, and profile.tsx and wallet.tsx already
+  // work this way.
+  useFocusEffect(
+    useCallback(() => {
+      fetchTrips();
+      fetchInvitationCount();
+    }, [fetchTrips, fetchInvitationCount]),
+  );
+
+  const renderTripItem = ({ item }: { item: any }) => {
+    const status = getTripStatus(item.date);
+    const badge = formatTripBadge(status);
+    const isShared = isSharedTrip(item);
+    const isOwned = isOwnedTrip(item);
+    // Two different facts, so two different sentences: whose trip you are
+    // looking at, or how many people you handed yours to.
+    const others = item.collaborators_count ?? 0;
+    const sharedLine = isOwned
+      ? others > 0
+        ? `Shared with ${others} ${others === 1 ? "person" : "people"}`
+        : null
+      : item.owner_name || item.owner_email
+        ? `Shared by ${item.owner_name || item.owner_email}`
+        : null;
+    const isPast = status?.kind === "past";
+
+    const isSelected = selectedIds.has(item.id);
+    // Nearly every trip has one (the backend falls back to a default cover),
+    // but a legacy trip predating this feature could still have none.
+    const hasCover = !!item.coverImageUrl;
+
+    const cardBody = (
+      <>
+        {/* Keeps title/date legible over an arbitrary photo, regardless of
+            how bright or busy it is. */}
+        {hasCover && <View style={styles.tripCardScrim} />}
+        <View style={styles.tripInfo}>
+          <View style={styles.tripCardTopRow}>
+            <Text
+              style={[
+                styles.locationText,
+                isShared && styles.locationTextShared,
+                hasCover && styles.locationTextOnCover,
+              ]}
+            >
+              {item.location}
+            </Text>
+            {isShared && (
+              <View style={styles.sharedChip}>
+                <Text style={styles.sharedChipText}>SHARED</Text>
+              </View>
+            )}
+            {badge && (
+              <View
+                style={[
+                  styles.badge,
+                  status?.kind === "ongoing" && styles.badgeOngoing,
+                  // The default badge is blue on white. On a violet card that
+                  // reads as two unrelated colours, so it borrows the card's.
+                  isShared &&
+                    status?.kind !== "ongoing" &&
+                    styles.badgeOnShared,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.badgeText,
+                    status?.kind === "ongoing" && styles.badgeTextOngoing,
+                    isShared &&
+                      status?.kind !== "ongoing" &&
+                      styles.badgeTextOnShared,
+                  ]}
+                >
+                  {badge}
+                </Text>
+              </View>
+            )}
+          </View>
+          <Text style={[styles.tripTitle, hasCover && styles.tripTitleOnCover]}>
+            {item.title}
+          </Text>
+          <Text style={[styles.dateText, hasCover && styles.dateTextOnCover]}>
+            {formatTripDates(item.date)}
+          </Text>
+          {sharedLine && (
+            <Text
+              style={[styles.sharedByText, hasCover && styles.sharedByTextOnCover]}
+            >
+              {sharedLine}
+            </Text>
+          )}
+        </View>
+
+        {isSelecting ? (
+          /* Tapping the card is what toggles selection, so this is an
+             indicator rather than its own button. A shared trip shows nothing
+             at all: an empty circle it will not fill in is worse than no
+             circle. */
+          !isOwned ? null : (
+            <Ionicons
+              name={isSelected ? "checkmark-circle" : "ellipse-outline"}
+              size={24}
+              color={
+                isSelected
+                  ? colors.primary
+                  : hasCover
+                    ? "#FFFFFF"
+                    : colors.textDisabled
+              }
+            />
+          )
+        ) : (
+          <View style={styles.tripActions}>
+            <TouchableOpacity
+              onPress={() => openEditTrip(item)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel={`Edit ${item.title}`}
+            >
+              <Ionicons
+                name="pencil-outline"
+                size={19}
+                color={hasCover ? "#FFFFFF" : isShared ? colors.shared : colors.primary}
+              />
+            </TouchableOpacity>
+            {!isOwned ? (
+              <TouchableOpacity
+                onPress={() => handleLeaveTrip(item)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityRole="button"
+                accessibilityLabel={`Leave ${item.title}`}
+              >
+                <Ionicons name="exit-outline" size={19} color={colors.danger} />
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                onPress={() => handleDeleteTrip(item)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityRole="button"
+                accessibilityLabel={`Delete ${item.title}`}
+              >
+                <Ionicons name="trash-outline" size={19} color={colors.danger} />
+              </TouchableOpacity>
+            )}
+            <Ionicons
+              name="chevron-forward"
+              size={20}
+              color={hasCover ? "#FFFFFF" : isShared ? colors.shared : colors.primary}
+            />
+          </View>
+        )}
+      </>
+    );
+
+    return (
+      <TouchableOpacity
+        style={[
+          styles.tripCard,
+          isShared && styles.tripCardShared,
+          isPast && styles.tripCardPast,
+          // Last, so a selected shared trip still reads as selected.
+          isSelected && styles.tripCardSelected,
+        ]}
+        onPress={() => {
+          // While selecting, the card toggles instead of navigating —
+          // opening a trip mid-selection would lose the ticks. A shared trip
+          // cannot be selected, so it stays inert rather than pretending.
+          if (isSelecting) {
+            toggleSelected(item);
+            return;
+          }
+          router.push({
+            pathname: "/trip-details",
+            params: {
+              id: item.id,
+              title: item.title,
+              location: item.location,
+              date: item.date,
+            },
+          });
+        }}
+        onLongPress={() => enterSelection(item)}
+        delayLongPress={300}
+        accessibilityRole={isSelecting ? "checkbox" : "button"}
+        accessibilityState={isSelecting ? { checked: isSelected } : undefined}
+      >
+        {hasCover ? (
+          <ImageBackground
+            source={{ uri: item.coverImageUrl }}
+            style={styles.tripCardBackground}
+            imageStyle={styles.tripCardBackgroundImage}
+            resizeMode="cover"
+          >
+            {cardBody}
+          </ImageBackground>
+        ) : (
+          <View style={styles.tripCardBackground}>{cardBody}</View>
+        )}
+      </TouchableOpacity>
+    );
+  };
+
+  const dateSummary =
+    startDate && endDate
+      ? formatDateRange(startDate, endDate)
+      : "Select your dates";
+
+  return (
+    <View style={styles.container}>
+      {isSelecting ? (
+        /* Selection replaces the heading and the Plan Trip button, so the
+           only actions on screen are the ones that apply to the ticks. */
+        <View style={styles.selectionBar}>
+          <TouchableOpacity
+            onPress={exitSelection}
+            disabled={isBulkDeleting}
+            accessibilityRole="button"
+          >
+            <Text style={styles.selectionAction}>Cancel</Text>
+          </TouchableOpacity>
+
+          <View style={styles.selectionCenter}>
+            <Text style={styles.selectionCount}>
+              {joinedCount > 0
+                ? `${selectedIds.size} of ${ownedTrips.length} selected`
+                : `${selectedIds.size} selected`}
+            </Text>
+            {joinedCount > 0 && (
+              <Text style={styles.selectionHint}>
+                Shared trips can&apos;t be deleted
+              </Text>
+            )}
+          </View>
+
+          <View style={styles.selectionRight}>
+            <TouchableOpacity
+              onPress={toggleSelectAll}
+              disabled={isBulkDeleting || ownedTrips.length === 0}
+              accessibilityRole="button"
+            >
+              <Text style={styles.selectionAction}>
+                {allSelected ? "Clear" : "Select all"}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={handleDeleteSelected}
+              disabled={isBulkDeleting || selectedIds.size === 0}
+              accessibilityRole="button"
+              accessibilityLabel={`Delete ${selectedIds.size} selected trips`}
+            >
+              {isBulkDeleting ? (
+                <ActivityIndicator size="small" color={colors.danger} />
+              ) : (
+                <Ionicons
+                  name="trash-outline"
+                  size={22}
+                  color={
+                    selectedIds.size === 0 ? colors.textDisabled : colors.danger
+                  }
+                />
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : (
+        <>
+          <View style={styles.titleRow}>
+            <Text style={styles.title}>Your Journeys</Text>
+            <View style={styles.titleRowActions}>
+              {/* Permanent, so the way into invitations never moves. The badge
+                  is the only part that comes and goes. */}
+              <TouchableOpacity
+                onPress={() => router.push("/invitations")}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  invitationCount > 0
+                    ? `Invitations, ${invitationCount} waiting`
+                    : "Invitations"
+                }
+              >
+                <Ionicons
+                  name="notifications-outline"
+                  size={23}
+                  color={colors.textSecondary}
+                />
+                {invitationCount > 0 && (
+                  <View style={styles.bellBadge}>
+                    <Text style={styles.bellBadgeText}>
+                      {invitationCount > 9 ? "9+" : invitationCount}
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+
+              {/* Only offered when there is something to select. */}
+              {ownedTrips.length > 0 && (
+                <TouchableOpacity
+                  onPress={() => setIsSelecting(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Select trips to delete"
+                >
+                  <Text style={styles.selectionAction}>Select</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+          <Text style={styles.subtitle}>
+            Plan, organize, and share your adventures.
+          </Text>
+
+          <AppButton
+            label="Plan Trip"
+            icon="add"
+            onPress={() => {
+              resetTripForm();
+              setIsModalVisible(true);
+            }}
+            style={styles.planButton}
+          />
+        </>
+      )}
+
+      <Modal visible={isModalVisible} animationType="slide" transparent={true}>
+        {/* Keeps the Create button reachable once the keyboard is up. */}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={styles.modalOverlay}
+        >
+          <ScrollView
+            contentContainerStyle={styles.modalScrollContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>
+                {editingTripId ? "Edit Journey" : "New Journey"}
+              </Text>
+
+              <FormField
+                label="Trip Title"
+                placeholder="e.g. Summer in Italy"
+                value={newTitle}
+                error={fieldErrors.title}
+                onChangeText={(text) => {
+                  setNewTitle(text);
+                  if (fieldErrors.title)
+                    setFieldErrors((prev) => ({ ...prev, title: undefined }));
+                }}
+                maxLength={LIMITS.tripTitle.max}
+              />
+
+              <FormField label="Destination" error={fieldErrors.location}>
+                <TextInput
+                  style={[
+                    fieldStyles.input,
+                    !!fieldErrors.location && fieldStyles.inputError,
+                  ]}
+                  placeholder="e.g. Rome"
+                  placeholderTextColor={colors.textDisabled}
+                  value={newLocation}
+                  onChangeText={handleLocationChange}
+                  onFocus={() => setShowSuggestions(true)}
+                  maxLength={LIMITS.destination.max}
+                />
+                {showSuggestions && destinationSuggestions.length > 0 && (
+                  <View style={styles.suggestionsBox}>
+                    {destinationSuggestions.map((suggestion) => (
+                      <TouchableOpacity
+                        key={suggestion.placeId}
+                        style={styles.suggestionRow}
+                        onPress={() => selectDestination(suggestion.description)}
+                      >
+                        <Ionicons
+                          name="location-outline"
+                          size={16}
+                          color={colors.textSecondary}
+                        />
+                        <Text style={styles.suggestionText}>
+                          {suggestion.description}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </FormField>
+
+              {/* Looks like an input, opens the range calendar. */}
+              <FormField label="Dates" error={fieldErrors.dates}>
+                <TouchableOpacity
+                  style={[
+                    fieldStyles.input,
+                    styles.dateTrigger,
+                    !!fieldErrors.dates && fieldStyles.inputError,
+                  ]}
+                  onPress={() => setDatePickerVisible(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Choose trip dates"
+                >
+                  <Text
+                    style={
+                      startDate && endDate
+                        ? styles.dateValueText
+                        : styles.datePlaceholder
+                    }
+                  >
+                    {dateSummary}
+                  </Text>
+                  <Ionicons
+                    name="calendar-outline"
+                    size={20}
+                    color={colors.textMuted}
+                  />
+                </TouchableOpacity>
+              </FormField>
+
+              {addError && <Text style={styles.addErrorText}>{addError}</Text>}
+
+              <View style={styles.modalButtons}>
+                <AppButton
+                  label="Cancel"
+                  variant="secondary"
+                  onPress={closeTripModal}
+                  disabled={isSubmitting}
+                  style={styles.modalButton}
+                />
+                <AppButton
+                  label="Create"
+                  onPress={handleAddTrip}
+                  loading={isSubmitting}
+                  style={styles.modalButton}
+                />
+              </View>
+            </View>
+          </ScrollView>
+
+          {/*
+            Must live INSIDE this Modal, not beside it. React Native cannot
+            present a second modal on top of an already-visible one from a
+            sibling position — it renders nothing at all.
+          */}
+          <DateRangePicker
+            visible={isDatePickerVisible}
+            initialStart={startDate}
+            initialEnd={endDate}
+            onConfirm={handleConfirmDates}
+            onCancel={() => setDatePickerVisible(false)}
+          />
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {loading ? (
+        <ActivityIndicator size="large" color={colors.primary} />
+      ) : error ? (
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>{error}</Text>
+          <AppButton label="Retry" onPress={fetchTrips} />
+        </View>
+      ) : (
+        <SectionList
+          sections={sections}
+          renderItem={renderTripItem}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.listContainer}
+          // Only worth showing a heading once trips actually split into groups.
+          renderSectionHeader={({ section }) =>
+            sections.length > 1 ? (
+              <Text style={styles.sectionHeader}>{section.title}</Text>
+            ) : null
+          }
+          stickySectionHeadersEnabled={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              colors={[colors.primary]}
+              tintColor={colors.primary}
+            />
+          }
+          ListEmptyComponent={
+            <View style={styles.emptyState}>
+              <Ionicons
+                name="airplane-outline"
+                size={52}
+                color={colors.textDisabled}
+              />
+              <Text style={styles.emptyText}>No trips yet</Text>
+              <Text style={styles.emptySubText}>
+                Tap “Plan Trip” to start your first journey.
+              </Text>
+            </View>
+          }
+        />
+      )}
+    </View>
+  );
+}
+
+const makeStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+      padding: Spacing.xl,
+      paddingTop: 60,
+    },
+    title: {
+      fontSize: FontSize.h1,
+      fontFamily: FontFamily.bold,
+      color: colors.textPrimary,
+    },
+    subtitle: {
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.regular,
+      color: colors.textSecondary,
+      marginBottom: Spacing.xxl,
+    },
+    planButton: { marginBottom: Spacing.xl },
+    listContainer: { paddingBottom: Spacing.xl },
+
+    tripCard: {
+      borderRadius: Radius.lg,
+      marginBottom: Spacing.md,
+      // Clips the cover photo (and the scrim) to the card's rounded corners.
+      overflow: "hidden",
+      ...Elevation.sm,
+    },
+    // A trip someone shared with you. Violet rather than any blue: the
+    // selected state below already owns primarySoft, and surfaceAlt is that
+    // same #eef2ff in light mode, so a blue tint would make every shared card
+    // look permanently selected. The accent bar carries the identity in dark
+    // mode, where the tint is deliberately subtle.
+    tripCardShared: {
+      backgroundColor: colors.sharedSoft,
+      borderLeftWidth: 4,
+      borderLeftColor: colors.shared,
+    },
+    // The card's own background/padding move here so the cover photo (or the
+    // plain-colour fallback for a trip without one) can fill the whole card;
+    // `tripCard` itself only owns the outer shape (radius, margin, overflow).
+    tripCardBackground: {
+      flex: 1,
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      padding: Spacing.lg,
+      minHeight: 96,
+      backgroundColor: colors.surface,
+    },
+    tripCardBackgroundImage: {
+      borderRadius: Radius.lg,
+    },
+    // Keeps title/date readable over a photo of any brightness, without
+    // needing to sample the image's own colours.
+    tripCardScrim: {
+      position: "absolute",
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: "rgba(0,0,0,0.38)",
+    },
+    // Past trips recede so upcoming ones read as the active content.
+    tripCardPast: { opacity: 0.65 },
+    tripCardSelected: {
+      borderWidth: 2,
+      borderColor: colors.primary,
+      backgroundColor: colors.primarySoft,
+    },
+    tripActions: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: Spacing.md,
+    },
+
+    titleRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+    },
+    titleRowActions: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: Spacing.lg,
+    },
+    bellBadge: {
+      position: "absolute",
+      top: -6,
+      right: -8,
+      minWidth: 18,
+      height: 18,
+      paddingHorizontal: 4,
+      borderRadius: Radius.pill,
+      backgroundColor: colors.danger,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    bellBadgeText: {
+      fontSize: 10,
+      lineHeight: 13,
+      fontFamily: FontFamily.bold,
+      color: colors.primaryContrast,
+    },
+    // Occupies the space the heading, subtitle and Plan Trip button leave
+    // behind, so entering selection does not shift the list under the finger.
+    selectionBar: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingVertical: Spacing.md,
+      marginBottom: Spacing.xl,
+      minHeight: 52,
+    },
+    selectionRight: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: Spacing.lg,
+    },
+    selectionCenter: { alignItems: "center" },
+    selectionCount: {
+      fontSize: FontSize.body,
+      fontFamily: FontFamily.semibold,
+      color: colors.textPrimary,
+    },
+    selectionHint: {
+      fontSize: FontSize.tiny,
+      fontFamily: FontFamily.regular,
+      color: colors.textMuted,
+      marginTop: 2,
+    },
+    selectionAction: {
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.semibold,
+      color: colors.primary,
+    },
+    tripInfo: { flex: 1 },
+    tripCardTopRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      marginBottom: Spacing.xs,
+    },
+    locationText: {
+      fontSize: FontSize.tiny,
+      color: colors.primary,
+      fontFamily: FontFamily.bold,
+      letterSpacing: 0.4,
+    },
+    tripTitle: {
+      fontSize: FontSize.h3,
+      fontFamily: FontFamily.semibold,
+      color: colors.textPrimary,
+    },
+    dateText: {
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.regular,
+      color: colors.textSecondary,
+      marginTop: Spacing.xs,
+    },
+    // Fixed light colours rather than theme tokens: this text sits on an
+    // arbitrary photo, not the app's own surface, so it should not change
+    // with light/dark mode the way the rest of the card does.
+    locationTextOnCover: { color: "#FFFFFF" },
+    tripTitleOnCover: { color: "#FFFFFF" },
+    dateTextOnCover: { color: "rgba(255,255,255,0.85)" },
+    sharedByTextOnCover: { color: "rgba(255,255,255,0.85)" },
+    badge: {
+      backgroundColor: colors.primarySoft,
+      paddingHorizontal: Spacing.sm,
+      paddingVertical: 3,
+      borderRadius: Radius.sm,
+      marginLeft: Spacing.sm,
+    },
+    badgeText: {
+      fontSize: FontSize.tiny,
+      fontFamily: FontFamily.bold,
+      color: colors.primary,
+    },
+    badgeOngoing: { backgroundColor: colors.successSoft },
+    badgeTextOngoing: { color: colors.success },
+    badgeOnShared: { backgroundColor: colors.surface },
+    badgeTextOnShared: { color: colors.shared },
+    locationTextShared: { color: colors.shared },
+    sharedChip: {
+      backgroundColor: colors.shared,
+      paddingHorizontal: Spacing.sm,
+      paddingVertical: 3,
+      borderRadius: Radius.sm,
+      marginLeft: Spacing.sm,
+    },
+    sharedChipText: {
+      fontSize: FontSize.tiny,
+      fontFamily: FontFamily.bold,
+      color: colors.sharedContrast,
+      letterSpacing: 0.4,
+    },
+    sharedByText: {
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.regular,
+      color: colors.textMuted,
+      marginTop: 2,
+    },
+    sectionHeader: {
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.bold,
+      color: colors.textMuted,
+      textTransform: "uppercase",
+      letterSpacing: 0.5,
+      marginBottom: Spacing.sm,
+      marginTop: Spacing.xs,
+    },
+
+    emptyState: { alignItems: "center", marginTop: 50 },
+    emptyText: {
+      fontSize: FontSize.h3,
+      fontFamily: FontFamily.semibold,
+      color: colors.textMuted,
+      marginTop: Spacing.md,
+    },
+    emptySubText: {
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.regular,
+      color: colors.textDisabled,
+      marginTop: Spacing.xs,
+      textAlign: "center",
+    },
+
+    modalOverlay: { flex: 1, backgroundColor: colors.overlay },
+    // justifyContent here (not on the overlay) so the sheet stays centred
+    // while still being able to scroll when the keyboard shrinks the space.
+    modalScrollContent: {
+      flexGrow: 1,
+      justifyContent: "center",
+      padding: Spacing.xl,
+    },
+    modalContent: {
+      backgroundColor: colors.surface,
+      borderRadius: Radius.xl,
+      padding: Spacing.xxl,
+      ...Elevation.lg,
+    },
+    modalTitle: {
+      fontSize: FontSize.h2,
+      fontFamily: FontFamily.bold,
+      marginBottom: Spacing.xl,
+      textAlign: "center",
+      color: colors.textPrimary,
+    },
+    dateTrigger: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+    },
+    dateValueText: {
+      fontSize: FontSize.body,
+      fontFamily: FontFamily.regular,
+      color: colors.textPrimary,
+    },
+    datePlaceholder: {
+      fontSize: FontSize.body,
+      fontFamily: FontFamily.regular,
+      color: colors.textDisabled,
+    },
+    modalButtons: { flexDirection: "row", gap: Spacing.md },
+    modalButton: { flex: 1 },
+    suggestionsBox: {
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: Radius.md,
+      marginTop: Spacing.xs,
+      backgroundColor: colors.surface,
+      overflow: "hidden",
+    },
+    suggestionRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: Spacing.sm,
+      paddingVertical: Spacing.sm,
+      paddingHorizontal: Spacing.md,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    suggestionText: {
+      fontSize: FontSize.body,
+      fontFamily: FontFamily.regular,
+      color: colors.textPrimary,
+      flexShrink: 1,
+    },
+
+    errorContainer: { alignItems: "center", marginTop: 40 },
+    errorText: {
+      color: colors.danger,
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.regular,
+      textAlign: "center",
+      marginBottom: Spacing.lg,
+    },
+    addErrorText: {
+      color: colors.danger,
+      fontSize: FontSize.caption,
+      fontFamily: FontFamily.regular,
+      textAlign: "center",
+      marginBottom: Spacing.md,
+    },
+  });

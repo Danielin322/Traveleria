@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.idea/
+build/
+*.zip
+package/
+deps/
+staging_*/
+zips/

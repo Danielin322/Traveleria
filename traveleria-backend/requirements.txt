@@ -1,0 +1,6 @@
+psycopg[binary]
+python-dotenv
+PyJWT[crypto]
+openai
+httpx
+boto3
