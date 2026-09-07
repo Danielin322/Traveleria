@@ -7,6 +7,8 @@
  * three steps — reserve a row and get an upload URL, PUT the file, confirm.
  */
 
+import * as FileSystem from "expo-file-system/legacy";
+
 import { apiFetch } from "./apiClient";
 import { ItineraryEvent } from "../utils/itinerary";
 
@@ -132,13 +134,12 @@ export async function createPost(post: NewPost): Promise<void> {
     );
   }
 
-  const fileBody = await fetch(post.image.uri).then((r) => r.blob());
-  const uploadResponse = await fetch(uploadUrl, {
-    method: "PUT",
+  const uploadResponse = await FileSystem.uploadAsync(uploadUrl, post.image.uri, {
+    httpMethod: "PUT",
+    uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
     headers: { "Content-Type": contentType },
-    body: fileBody,
   });
-  if (!uploadResponse.ok) {
+  if (uploadResponse.status < 200 || uploadResponse.status >= 300) {
     throw new Error(
       `Image upload failed (HTTP ${uploadResponse.status}). Please try again.`,
     );

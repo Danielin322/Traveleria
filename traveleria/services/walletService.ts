@@ -7,6 +7,8 @@
  * the screen does not have to know that.
  */
 
+import * as FileSystem from "expo-file-system/legacy";
+
 import { apiFetch } from "./apiClient";
 
 export type WalletDocument = {
@@ -84,16 +86,17 @@ export async function createDocument(doc: NewDocument): Promise<void> {
 
   const { id, uploadUrl, contentType } = await createResponse.json();
 
-  // Read the picked file, then PUT the bytes straight to S3. The Content-Type
-  // must match what the URL was signed for or S3 rejects the request.
-  const fileBody = await fetch(doc.uri).then((r) => r.blob());
-  const uploadResponse = await fetch(uploadUrl, {
-    method: "PUT",
+  // Stream the picked file straight to S3. uploadAsync sends exactly the
+  // headers given: passing a Blob to fetch would let the blob's own (empty)
+  // type overwrite Content-Type, and since the URL is signed with the content
+  // type pinned in, any mismatch fails the signature check with a 403.
+  const uploadResponse = await FileSystem.uploadAsync(uploadUrl, doc.uri, {
+    httpMethod: "PUT",
+    uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
     headers: { "Content-Type": contentType },
-    body: fileBody,
   });
 
-  if (!uploadResponse.ok) {
+  if (uploadResponse.status < 200 || uploadResponse.status >= 300) {
     throw new Error(
       `Upload to storage failed (HTTP ${uploadResponse.status}). Please try again.`,
     );
@@ -155,14 +158,13 @@ export async function uploadAvatar(uri: string, mimeType: string): Promise<void>
     throw new Error("The server did not return an upload URL.");
   }
 
-  const fileBody = await fetch(uri).then((r) => r.blob());
-  const uploadResponse = await fetch(uploadUrl, {
-    method: "PUT",
+  const uploadResponse = await FileSystem.uploadAsync(uploadUrl, uri, {
+    httpMethod: "PUT",
+    uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
     headers: { "Content-Type": mimeType },
-    body: fileBody,
   });
 
-  if (!uploadResponse.ok) {
+  if (uploadResponse.status < 200 || uploadResponse.status >= 300) {
     throw new Error(
       `Photo upload failed (HTTP ${uploadResponse.status}). Please try again.`,
     );
