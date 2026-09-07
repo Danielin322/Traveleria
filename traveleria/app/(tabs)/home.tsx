@@ -1,9 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  ImageBackground,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -12,6 +13,7 @@ import {
   SectionList,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -84,6 +86,13 @@ export default function HomeScreen() {
   // Guards against a double tap creating the same trip twice.
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  const [destinationSuggestions, setDestinationSuggestions] = useState<
+    { placeId: string; description: string }[]
+  >([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  // Debounced so typing does not fire an autocomplete request per keystroke.
+  const autocompleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Upcoming trips first (soonest at the top), past trips below.
   const sections = useMemo(() => {
     const { upcoming, past } = groupTripsByTime(trips);
@@ -150,6 +159,44 @@ export default function HomeScreen() {
     setEndDate(null);
     setFieldErrors({});
     setAddError(null);
+    setDestinationSuggestions([]);
+    setShowSuggestions(false);
+  };
+
+  const fetchDestinationSuggestions = async (text: string) => {
+    if (!API_URL || text.trim().length < 2) {
+      setDestinationSuggestions([]);
+      return;
+    }
+    try {
+      const response = await apiFetch(
+        `/trips/autocomplete?q=${encodeURIComponent(text.trim())}`,
+      );
+      const data = await response.json();
+      setDestinationSuggestions(Array.isArray(data) ? data : []);
+    } catch {
+      // A failed autocomplete lookup just means no suggestions — the field
+      // still accepts free text, so this is not surfaced as an error.
+      setDestinationSuggestions([]);
+    }
+  };
+
+  const handleLocationChange = (text: string) => {
+    setNewLocation(text);
+    if (fieldErrors.location)
+      setFieldErrors((prev) => ({ ...prev, location: undefined }));
+    setShowSuggestions(true);
+    if (autocompleteTimer.current) clearTimeout(autocompleteTimer.current);
+    autocompleteTimer.current = setTimeout(
+      () => fetchDestinationSuggestions(text),
+      300,
+    );
+  };
+
+  const selectDestination = (description: string) => {
+    setNewLocation(description);
+    setDestinationSuggestions([]);
+    setShowSuggestions(false);
   };
 
   const closeTripModal = () => {
@@ -507,43 +554,23 @@ export default function HomeScreen() {
     const isPast = status?.kind === "past";
 
     const isSelected = selectedIds.has(item.id);
+    // Nearly every trip has one (the backend falls back to a default cover),
+    // but a legacy trip predating this feature could still have none.
+    const hasCover = !!item.coverImageUrl;
 
-    return (
-      <TouchableOpacity
-        style={[
-          styles.tripCard,
-          isShared && styles.tripCardShared,
-          isPast && styles.tripCardPast,
-          // Last, so a selected shared trip still reads as selected.
-          isSelected && styles.tripCardSelected,
-        ]}
-        onPress={() => {
-          // While selecting, the card toggles instead of navigating —
-          // opening a trip mid-selection would lose the ticks. A shared trip
-          // cannot be selected, so it stays inert rather than pretending.
-          if (isSelecting) {
-            toggleSelected(item);
-            return;
-          }
-          router.push({
-            pathname: "/trip-details",
-            params: {
-              id: item.id,
-              title: item.title,
-              location: item.location,
-              date: item.date,
-            },
-          });
-        }}
-        onLongPress={() => enterSelection(item)}
-        delayLongPress={300}
-        accessibilityRole={isSelecting ? "checkbox" : "button"}
-        accessibilityState={isSelecting ? { checked: isSelected } : undefined}
-      >
+    const cardBody = (
+      <>
+        {/* Keeps title/date legible over an arbitrary photo, regardless of
+            how bright or busy it is. */}
+        {hasCover && <View style={styles.tripCardScrim} />}
         <View style={styles.tripInfo}>
           <View style={styles.tripCardTopRow}>
             <Text
-              style={[styles.locationText, isShared && styles.locationTextShared]}
+              style={[
+                styles.locationText,
+                isShared && styles.locationTextShared,
+                hasCover && styles.locationTextOnCover,
+              ]}
             >
               {item.location}
             </Text>
@@ -578,10 +605,18 @@ export default function HomeScreen() {
               </View>
             )}
           </View>
-          <Text style={styles.tripTitle}>{item.title}</Text>
-          <Text style={styles.dateText}>{formatTripDates(item.date)}</Text>
+          <Text style={[styles.tripTitle, hasCover && styles.tripTitleOnCover]}>
+            {item.title}
+          </Text>
+          <Text style={[styles.dateText, hasCover && styles.dateTextOnCover]}>
+            {formatTripDates(item.date)}
+          </Text>
           {sharedLine && (
-            <Text style={styles.sharedByText}>{sharedLine}</Text>
+            <Text
+              style={[styles.sharedByText, hasCover && styles.sharedByTextOnCover]}
+            >
+              {sharedLine}
+            </Text>
           )}
         </View>
 
@@ -594,7 +629,13 @@ export default function HomeScreen() {
             <Ionicons
               name={isSelected ? "checkmark-circle" : "ellipse-outline"}
               size={24}
-              color={isSelected ? colors.primary : colors.textDisabled}
+              color={
+                isSelected
+                  ? colors.primary
+                  : hasCover
+                    ? "#FFFFFF"
+                    : colors.textDisabled
+              }
             />
           )
         ) : (
@@ -608,7 +649,7 @@ export default function HomeScreen() {
               <Ionicons
                 name="pencil-outline"
                 size={19}
-                color={isShared ? colors.shared : colors.primary}
+                color={hasCover ? "#FFFFFF" : isShared ? colors.shared : colors.primary}
               />
             </TouchableOpacity>
             {!isOwned ? (
@@ -633,9 +674,56 @@ export default function HomeScreen() {
             <Ionicons
               name="chevron-forward"
               size={20}
-              color={isShared ? colors.shared : colors.primary}
+              color={hasCover ? "#FFFFFF" : isShared ? colors.shared : colors.primary}
             />
           </View>
+        )}
+      </>
+    );
+
+    return (
+      <TouchableOpacity
+        style={[
+          styles.tripCard,
+          isShared && styles.tripCardShared,
+          isPast && styles.tripCardPast,
+          // Last, so a selected shared trip still reads as selected.
+          isSelected && styles.tripCardSelected,
+        ]}
+        onPress={() => {
+          // While selecting, the card toggles instead of navigating —
+          // opening a trip mid-selection would lose the ticks. A shared trip
+          // cannot be selected, so it stays inert rather than pretending.
+          if (isSelecting) {
+            toggleSelected(item);
+            return;
+          }
+          router.push({
+            pathname: "/trip-details",
+            params: {
+              id: item.id,
+              title: item.title,
+              location: item.location,
+              date: item.date,
+            },
+          });
+        }}
+        onLongPress={() => enterSelection(item)}
+        delayLongPress={300}
+        accessibilityRole={isSelecting ? "checkbox" : "button"}
+        accessibilityState={isSelecting ? { checked: isSelected } : undefined}
+      >
+        {hasCover ? (
+          <ImageBackground
+            source={{ uri: item.coverImageUrl }}
+            style={styles.tripCardBackground}
+            imageStyle={styles.tripCardBackgroundImage}
+            resizeMode="cover"
+          >
+            {cardBody}
+          </ImageBackground>
+        ) : (
+          <View style={styles.tripCardBackground}>{cardBody}</View>
         )}
       </TouchableOpacity>
     );
@@ -792,21 +880,40 @@ export default function HomeScreen() {
                 maxLength={LIMITS.tripTitle.max}
               />
 
-              <FormField
-                label="Destination"
-                placeholder="e.g. Rome"
-                value={newLocation}
-                error={fieldErrors.location}
-                onChangeText={(text) => {
-                  setNewLocation(text);
-                  if (fieldErrors.location)
-                    setFieldErrors((prev) => ({
-                      ...prev,
-                      location: undefined,
-                    }));
-                }}
-                maxLength={LIMITS.destination.max}
-              />
+              <FormField label="Destination" error={fieldErrors.location}>
+                <TextInput
+                  style={[
+                    fieldStyles.input,
+                    !!fieldErrors.location && fieldStyles.inputError,
+                  ]}
+                  placeholder="e.g. Rome"
+                  placeholderTextColor={colors.textDisabled}
+                  value={newLocation}
+                  onChangeText={handleLocationChange}
+                  onFocus={() => setShowSuggestions(true)}
+                  maxLength={LIMITS.destination.max}
+                />
+                {showSuggestions && destinationSuggestions.length > 0 && (
+                  <View style={styles.suggestionsBox}>
+                    {destinationSuggestions.map((suggestion) => (
+                      <TouchableOpacity
+                        key={suggestion.placeId}
+                        style={styles.suggestionRow}
+                        onPress={() => selectDestination(suggestion.description)}
+                      >
+                        <Ionicons
+                          name="location-outline"
+                          size={16}
+                          color={colors.textSecondary}
+                        />
+                        <Text style={styles.suggestionText}>
+                          {suggestion.description}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </FormField>
 
               {/* Looks like an input, opens the range calendar. */}
               <FormField label="Dates" error={fieldErrors.dates}>
@@ -942,13 +1049,10 @@ const makeStyles = (colors: ThemeColors) =>
     listContainer: { paddingBottom: Spacing.xl },
 
     tripCard: {
-      backgroundColor: colors.surface,
       borderRadius: Radius.lg,
-      padding: Spacing.lg,
       marginBottom: Spacing.md,
-      flexDirection: "row",
-      justifyContent: "space-between",
-      alignItems: "center",
+      // Clips the cover photo (and the scrim) to the card's rounded corners.
+      overflow: "hidden",
       ...Elevation.sm,
     },
     // A trip someone shared with you. Violet rather than any blue: the
@@ -960,6 +1064,31 @@ const makeStyles = (colors: ThemeColors) =>
       backgroundColor: colors.sharedSoft,
       borderLeftWidth: 4,
       borderLeftColor: colors.shared,
+    },
+    // The card's own background/padding move here so the cover photo (or the
+    // plain-colour fallback for a trip without one) can fill the whole card;
+    // `tripCard` itself only owns the outer shape (radius, margin, overflow).
+    tripCardBackground: {
+      flex: 1,
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      padding: Spacing.lg,
+      minHeight: 96,
+      backgroundColor: colors.surface,
+    },
+    tripCardBackgroundImage: {
+      borderRadius: Radius.lg,
+    },
+    // Keeps title/date readable over a photo of any brightness, without
+    // needing to sample the image's own colours.
+    tripCardScrim: {
+      position: "absolute",
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: "rgba(0,0,0,0.38)",
     },
     // Past trips recede so upcoming ones read as the active content.
     tripCardPast: { opacity: 0.65 },
@@ -1057,6 +1186,13 @@ const makeStyles = (colors: ThemeColors) =>
       color: colors.textSecondary,
       marginTop: Spacing.xs,
     },
+    // Fixed light colours rather than theme tokens: this text sits on an
+    // arbitrary photo, not the app's own surface, so it should not change
+    // with light/dark mode the way the rest of the card does.
+    locationTextOnCover: { color: "#FFFFFF" },
+    tripTitleOnCover: { color: "#FFFFFF" },
+    dateTextOnCover: { color: "rgba(255,255,255,0.85)" },
+    sharedByTextOnCover: { color: "rgba(255,255,255,0.85)" },
     badge: {
       backgroundColor: colors.primarySoft,
       paddingHorizontal: Spacing.sm,
@@ -1156,6 +1292,29 @@ const makeStyles = (colors: ThemeColors) =>
     },
     modalButtons: { flexDirection: "row", gap: Spacing.md },
     modalButton: { flex: 1 },
+    suggestionsBox: {
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: Radius.md,
+      marginTop: Spacing.xs,
+      backgroundColor: colors.surface,
+      overflow: "hidden",
+    },
+    suggestionRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: Spacing.sm,
+      paddingVertical: Spacing.sm,
+      paddingHorizontal: Spacing.md,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    suggestionText: {
+      fontSize: FontSize.body,
+      fontFamily: FontFamily.regular,
+      color: colors.textPrimary,
+      flexShrink: 1,
+    },
 
     errorContainer: { alignItems: "center", marginTop: 40 },
     errorText: {

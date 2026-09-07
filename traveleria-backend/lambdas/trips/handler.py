@@ -11,15 +11,21 @@ thing to remember to redeploy.
 /invitations is the one endpoint here that is not addressed by a trip id. It is
 still trip data, and splitting it out would buy nothing but another deployment
 target.
+
+/trips/autocomplete is also here rather than its own Lambda, for the same
+reason: it is a one-off proxy in support of the trip form, not a resource of
+its own.
 """
 
 import os
 import re
 
 import boto3
+import httpx
 from botocore.config import Config
 
 from shared.auth import get_current_user
+from shared.cover_image import get_or_create_cover_id
 from shared.database import get_db
 from shared.response import error, success
 from shared.utils import (
@@ -40,6 +46,8 @@ from shared.utils import (
 BUCKET = os.getenv("WALLET_BUCKET", "")
 AVATAR_VIEW_TTL_SECONDS = 15 * 60
 _s3 = boto3.client("s3", config=Config(signature_version="s3v4"))
+
+GOOGLE_PLACES_API_KEY = os.getenv("GOOGLE_PLACES_API_KEY", "")
 
 # Matches the shape the signup screen validates against, and the one in
 # traveleria/utils/validation.ts. Deliberately permissive: the authority on
@@ -79,6 +87,9 @@ def lambda_handler(event, context):
         elif resource == "/invitations/{invitation_id}":
             if method == "PUT":
                 return _respond_to_invitation(event, current_user)
+        elif resource == "/trips/autocomplete":
+            if method == "GET":
+                return _autocomplete_destinations(event)
         else:
             if method == "GET":
                 return _get_trips(current_user)
@@ -119,6 +130,9 @@ def _get_trips(current_user):
         #
         # events_count lets the delete confirmation name what is about to go
         # with the trip. collaborators_count and role decide the card's badge.
+        # cover_image_url/credit_name/credit_url come from the specific cover
+        # photo this trip was assigned (see get_or_create_cover_id) — a second
+        # trip to the same destination can have a different one.
         db.execute(
             f"""
             SELECT trips.id, trips.title, trips.location,
@@ -126,6 +140,7 @@ def _get_trips(current_user):
                    (trips.owner_user_id = %(user_id)s) AS is_owner,
                    owner.email AS owner_email,
                    owner.full_name AS owner_name,
+                   dc.cover_image_url, dc.credit_name, dc.credit_url,
                    (SELECT COUNT(*) FROM day_places dp
                     JOIN trip_days td ON td.id = dp.trip_day_id
                     WHERE td.trip_id = trips.id) AS events_count,
@@ -139,6 +154,7 @@ def _get_trips(current_user):
                       AND tc3.status = 'active') AS membership_id
             FROM trips
             JOIN users owner ON owner.id = trips.owner_user_id
+            LEFT JOIN destination_covers dc ON dc.id = trips.destination_cover_id
             WHERE {TRIP_ACCESS_PREDICATE}
             ORDER BY trips.created_at DESC
             """,
@@ -164,9 +180,19 @@ def _create_trip(event, current_user):
     body = parse_body(event)
     start_date, end_date = parse_trip_dates(body.get("date", ""))
     with get_db() as db:
+        destination_cover_id = get_or_create_cover_id(db, body["location"], current_user["id"])
         db.execute(
-            "INSERT INTO trips (owner_user_id, title, location, start_date, end_date) VALUES (%s, %s, %s, %s, %s) RETURNING id, title, location, start_date, end_date",
-            (current_user["id"], body["title"], body["location"], start_date, end_date),
+            """
+            WITH new_trip AS (
+                INSERT INTO trips (owner_user_id, title, location, start_date, end_date, destination_cover_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING id, title, location, start_date, end_date, destination_cover_id
+            )
+            SELECT nt.*, dc.cover_image_url, dc.credit_name, dc.credit_url
+            FROM new_trip nt
+            LEFT JOIN destination_covers dc ON dc.id = nt.destination_cover_id
+            """,
+            (current_user["id"], body["title"], body["location"], start_date, end_date, destination_cover_id),
         )
         return success({"message": "Trip added successfully", "trip": serialize_trip(db.fetchone())}, status=201)
 
@@ -182,13 +208,26 @@ def _update_trip(event, current_user):
         # definition and it lives in shared/utils.py.
         require_trip_access(db, trip_uuid, current_user["id"])
 
+        # A destination change gets a cover not already used by another trip;
+        # an unchanged destination keeps this trip's own current cover, since
+        # it is excluded from that "already used" check.
+        destination_cover_id = get_or_create_cover_id(
+            db, body["location"], current_user["id"], exclude_trip_id=trip_uuid
+        )
+
         db.execute(
             """
-            UPDATE trips SET title=%s, location=%s, start_date=%s, end_date=%s, updated_at=NOW()
-            WHERE id=%s
-            RETURNING id, title, location, start_date, end_date
+            WITH updated_trip AS (
+                UPDATE trips SET title=%s, location=%s, start_date=%s, end_date=%s,
+                                  destination_cover_id=%s, updated_at=NOW()
+                WHERE id=%s
+                RETURNING id, title, location, start_date, end_date, destination_cover_id
+            )
+            SELECT ut.*, dc.cover_image_url, dc.credit_name, dc.credit_url
+            FROM updated_trip ut
+            LEFT JOIN destination_covers dc ON dc.id = ut.destination_cover_id
             """,
-            (body["title"], body["location"], start_date, end_date, trip_uuid),
+            (body["title"], body["location"], start_date, end_date, destination_cover_id, trip_uuid),
         )
         row = db.fetchone()
 
@@ -569,13 +608,16 @@ def _respond_to_invitation(event, current_user):
             SELECT trips.id, trips.title, trips.location,
                    trips.start_date, trips.end_date,
                    owner.email AS owner_email, owner.full_name AS owner_name,
+                   dc.cover_image_url, dc.credit_name, dc.credit_url,
                    (SELECT COUNT(*) FROM day_places dp
                     JOIN trip_days td ON td.id = dp.trip_day_id
                     WHERE td.trip_id = trips.id) AS events_count,
                    (SELECT COUNT(*) FROM trip_collaborators tc2
                     WHERE tc2.trip_id = trips.id AND tc2.status = 'active')
                        AS collaborators_count
-            FROM trips JOIN users owner ON owner.id = trips.owner_user_id
+            FROM trips
+            JOIN users owner ON owner.id = trips.owner_user_id
+            LEFT JOIN destination_covers dc ON dc.id = trips.destination_cover_id
             WHERE trips.id = %s
             """,
             (row["trip_id"],),
@@ -593,3 +635,34 @@ def _respond_to_invitation(event, current_user):
             "owner_name": trip["owner_name"],
         },
     })
+
+
+# ---------------------------------------------------------------------------
+# Destination autocomplete
+# ---------------------------------------------------------------------------
+
+
+def _autocomplete_destinations(event):
+    """
+    Proxies Google Places Autocomplete so the API key stays server-side.
+    Restricted to `(regions)` results (cities/countries), matching what the
+    destination field is for — not businesses or addresses.
+    """
+    query = ((event.get("queryStringParameters") or {}).get("q") or "").strip()
+    if not query or not GOOGLE_PLACES_API_KEY:
+        return success([])
+
+    try:
+        resp = httpx.get(
+            "https://maps.googleapis.com/maps/api/place/autocomplete/json",
+            params={"input": query, "types": "(regions)", "key": GOOGLE_PLACES_API_KEY},
+            timeout=5.0,
+        )
+        predictions = resp.json().get("predictions") or []
+    except Exception:
+        return success([])
+
+    return success([
+        {"placeId": p["place_id"], "description": p["description"]}
+        for p in predictions[:5]
+    ])

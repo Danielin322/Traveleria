@@ -26,6 +26,7 @@ ROUTES = [
     ("GET", re.compile(r"^/$"), health_handler, "/", []),
     ("GET", re.compile(r"^/trips$"), trips_handler, "/trips", []),
     ("POST", re.compile(r"^/trips$"), trips_handler, "/trips", []),
+    ("GET", re.compile(r"^/trips/autocomplete$"), trips_handler, "/trips/autocomplete", []),
     ("PUT", re.compile(r"^/trips/([^/]+)$"), trips_handler, "/trips/{trip_id}", ["trip_id"]),
     ("DELETE", re.compile(r"^/trips/([^/]+)$"), trips_handler, "/trips/{trip_id}", ["trip_id"]),
     ("GET", re.compile(r"^/trips/([^/]+)/itinerary$"), itinerary_handler,
@@ -130,6 +131,6 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     PORT = 8000
     print(f"Traveleria local dev server on http://localhost:{PORT}")
-    print("Routes: GET / | GET,POST /trips | GET,POST /trips/{trip_id}/itinerary | "
+    print("Routes: GET / | GET,POST /trips | GET /trips/autocomplete | GET,POST /trips/{trip_id}/itinerary | "
           "PUT,DELETE /trips/{trip_id}/itinerary/{event_id} | GET,PATCH /users/me | POST /chat")
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
