@@ -54,12 +54,22 @@ export type Post = {
   comments: Comment[];
 };
 
+export type AboutMe = {
+  country: string | null;
+  language: string | null;
+  age: number | null;
+  gender: string | null;
+  dietary: string[];
+  interests: string[];
+};
+
 export type PublicProfile = SocialUser & {
   postsCount: number;
   followersCount: number;
   followingCount: number;
   isFollowing: boolean;
   isMe: boolean;
+  aboutMe: AboutMe;
 };
 
 export type PersonListItem = SocialUser & {
@@ -135,7 +145,10 @@ export async function createPost(post: NewPost): Promise<void> {
   const fileBody = await fetch(post.image.uri).then((r) => r.blob());
   const uploadResponse = await fetch(uploadUrl, {
     method: "PUT",
-    headers: { "Content-Type": contentType },
+    headers: {
+      "Content-Type": contentType,
+      "x-amz-server-side-encryption": "AES256",
+    },
     body: fileBody,
   });
   if (!uploadResponse.ok) {
@@ -237,6 +250,24 @@ export async function getUserPosts(userId: string): Promise<Post[]> {
   const response = await apiFetch(`/social/users/${userId}/posts`);
   if (!response.ok) {
     throw new Error(await failureReason(response, "Could not load their posts."));
+  }
+  return response.json();
+}
+
+/** Everyone who follows this user, for their "Followers" list. */
+export async function getFollowers(userId: string): Promise<PersonListItem[]> {
+  const response = await apiFetch(`/social/users/${userId}/followers`);
+  if (!response.ok) {
+    throw new Error(await failureReason(response, "Could not load followers."));
+  }
+  return response.json();
+}
+
+/** Everyone this user follows, for their "Following" list. */
+export async function getFollowing(userId: string): Promise<PersonListItem[]> {
+  const response = await apiFetch(`/social/users/${userId}/following`);
+  if (!response.ok) {
+    throw new Error(await failureReason(response, "Could not load following."));
   }
   return response.json();
 }

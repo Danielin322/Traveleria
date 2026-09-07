@@ -32,6 +32,7 @@ import {
 import { ThemeMode, useTheme } from "../../contexts/ThemeContext";
 import { apiFetch } from "../../services/apiClient";
 import { signOutUser } from "../../services/authService";
+import { getUserProfile } from "../../services/socialService";
 import { uploadAvatar } from "../../services/walletService";
 
 const THEME_OPTIONS = [
@@ -55,6 +56,7 @@ export default function ProfileScreen() {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   const [userData, setUserData] = useState({
+    id: "",
     fullName: "",
     country: "",
     language: "",
@@ -64,6 +66,11 @@ export default function ProfileScreen() {
     gender: "",
     dietary: [] as string[],
   });
+  const [socialStats, setSocialStats] = useState({
+    postsCount: 0,
+    followersCount: 0,
+    followingCount: 0,
+  });
 
   const fetchProfile = async () => {
     try {
@@ -72,6 +79,7 @@ export default function ProfileScreen() {
       if (!response.ok) throw new Error(`Request failed (${response.status})`);
       const data = await response.json();
       setUserData({
+        id: data.id || "",
         fullName: data.full_name || "",
         country: data.country || "",
         language: data.language || "",
@@ -85,6 +93,20 @@ export default function ProfileScreen() {
       // Null when this account has no photo — which is exactly what another
       // account signing in on the same device should see.
       setPhotoUri(data.avatar_url ?? null);
+
+      // Posts/followers/following live on the social profile, not /users/me.
+      if (data.id) {
+        try {
+          const social = await getUserProfile(data.id);
+          setSocialStats({
+            postsCount: social.postsCount,
+            followersCount: social.followersCount,
+            followingCount: social.followingCount,
+          });
+        } catch {
+          // Non-fatal: the rest of the profile still loads without these.
+        }
+      }
     } catch (err) {
       // Previously swallowed, which left the screen looking blank but fine.
       setError("Could not load your profile. Pull down or tap retry.");
@@ -247,6 +269,42 @@ export default function ProfileScreen() {
           <Text style={styles.statNumber}>{userData.tripsCount}</Text>
           <Text style={styles.statLabel}>Trips</Text>
         </View>
+        <View style={styles.statDivider} />
+        <TouchableOpacity
+          style={styles.statBox}
+          onPress={() =>
+            router.push({ pathname: "/user-profile", params: { id: userData.id } })
+          }
+        >
+          <Text style={styles.statNumber}>{socialStats.postsCount}</Text>
+          <Text style={styles.statLabel}>Posts</Text>
+        </TouchableOpacity>
+        <View style={styles.statDivider} />
+        <TouchableOpacity
+          style={styles.statBox}
+          onPress={() =>
+            router.push({
+              pathname: "/people-list",
+              params: { userId: userData.id, type: "followers" },
+            })
+          }
+        >
+          <Text style={styles.statNumber}>{socialStats.followersCount}</Text>
+          <Text style={styles.statLabel}>Followers</Text>
+        </TouchableOpacity>
+        <View style={styles.statDivider} />
+        <TouchableOpacity
+          style={styles.statBox}
+          onPress={() =>
+            router.push({
+              pathname: "/people-list",
+              params: { userId: userData.id, type: "following" },
+            })
+          }
+        >
+          <Text style={styles.statNumber}>{socialStats.followingCount}</Text>
+          <Text style={styles.statLabel}>Following</Text>
+        </TouchableOpacity>
       </View>
 
       <View style={styles.infoSection}>

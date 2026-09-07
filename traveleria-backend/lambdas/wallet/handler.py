@@ -206,9 +206,17 @@ def _create_document(event, current_user):
 
     # ContentType is pinned into the signature, so the URL cannot be reused to
     # upload a different kind of file than the one that was declared.
+    # The Lab account's bucket policy denies any PutObject that does not
+    # declare server-side encryption, so it has to be signed into the URL
+    # (and sent back as a header by the client) or S3 answers 403.
     upload_url = _s3.generate_presigned_url(
         "put_object",
-        Params={"Bucket": BUCKET, "Key": s3_key, "ContentType": mime_type},
+        Params={
+            "Bucket": BUCKET,
+            "Key": s3_key,
+            "ContentType": mime_type,
+            "ServerSideEncryption": "AES256",
+        },
         ExpiresIn=UPLOAD_URL_TTL_SECONDS,
     )
 

@@ -113,8 +113,17 @@ export default function HomeScreen() {
     try {
       setError(null);
       const response = await apiFetch("/trips");
+      if (!response.ok) {
+        // A rejected request still answers with JSON — just an error object,
+        // not the array this screen expects. Stopping here is what keeps it
+        // out of groupTripsByTime, which crashes trying to iterate it.
+        setError(
+          `Could not load your trips (HTTP ${response.status}). Pull down or tap retry.`,
+        );
+        return;
+      }
       const data = await response.json();
-      setTrips(data);
+      setTrips(Array.isArray(data) ? data : []);
     } catch (err) {
       setError(
         "Could not connect to server. Make sure the backend is running.",

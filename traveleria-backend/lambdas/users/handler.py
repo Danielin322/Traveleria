@@ -170,9 +170,17 @@ def _avatar_upload(current_user, content_type):
 
     extension = mimetypes.guess_extension(content_type) or ".jpg"
     s3_key = f"users/{current_user['id']}/avatar{extension}"
+    # The Lab account's bucket policy denies any PutObject that does not
+    # declare server-side encryption, so it has to be signed into the URL
+    # (and sent back as a header by the client) or S3 answers 403.
     url = _s3.generate_presigned_url(
         "put_object",
-        Params={"Bucket": BUCKET, "Key": s3_key, "ContentType": content_type},
+        Params={
+            "Bucket": BUCKET,
+            "Key": s3_key,
+            "ContentType": content_type,
+            "ServerSideEncryption": "AES256",
+        },
         ExpiresIn=AVATAR_UPLOAD_TTL_SECONDS,
     )
     return s3_key, url

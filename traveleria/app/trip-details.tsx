@@ -180,8 +180,14 @@ export default function TripDetailsScreen() {
         handleAccessLost();
         return;
       }
+      if (!response.ok) {
+        // sortEvents spreads its argument, so an error body reaching it
+        // takes the screen down rather than leaving the itinerary empty.
+        console.error(`Error fetching itinerary: HTTP ${response.status}`);
+        return;
+      }
       const data = await response.json();
-      setItinerary(sortEvents(data));
+      setItinerary(sortEvents(Array.isArray(data) ? data : []));
     } catch (error) {
       console.error("Error fetching itinerary:", error);
     } finally {

@@ -87,6 +87,12 @@ def lambda_handler(event, context):
         elif resource == "/social/users/{user_id}/posts":
             if method == "GET":
                 return _get_user_posts(event, current_user)
+        elif resource == "/social/users/{user_id}/followers":
+            if method == "GET":
+                return _get_followers(event, current_user)
+        elif resource == "/social/users/{user_id}/following":
+            if method == "GET":
+                return _get_following(event, current_user)
         elif resource == "/social/shared-trips/{trip_id}":
             if method == "GET":
                 return _get_shared_trip(event, current_user)
@@ -335,9 +341,17 @@ def _create_post(event, current_user):
             raise AppError("WALLET_BUCKET is not configured", status=500)
         extension = mimetypes.guess_extension(mime_type) or ""
         image_s3_key = f"users/{current_user['id']}/social/{post_id}{extension}"
+        # The Lab account's bucket policy denies any PutObject that does not
+        # declare server-side encryption, so it has to be signed into the URL
+        # (and sent back as a header by the client) or S3 answers 403.
         upload_url = _s3.generate_presigned_url(
             "put_object",
-            Params={"Bucket": BUCKET, "Key": image_s3_key, "ContentType": mime_type},
+            Params={
+                "Bucket": BUCKET,
+                "Key": image_s3_key,
+                "ContentType": mime_type,
+                "ServerSideEncryption": "AES256",
+            },
             ExpiresIn=UPLOAD_URL_TTL_SECONDS,
         )
 
@@ -540,21 +554,18 @@ def _list_people(current_user):
         )
         rows = db.fetchall()
 
-    return success([
-        {
-            **_serialize_user(row["id"], row["full_name"], row["email"], row["avatar_s3_key"]),
-            "isFollowing": row["is_following"],
-            "followersCount": row["followers_count"],
-        }
-        for row in rows
-    ])
+    return success(_serialize_people_rows(rows))
 
 
 def _get_user_profile(event, current_user):
     user_uuid = parse_uuid((event.get("pathParameters") or {}).get("user_id", ""), "user_id")
     with get_db() as db:
         db.execute(
-            "SELECT id, full_name, email, avatar_s3_key FROM users WHERE id = %s",
+            """
+            SELECT id, full_name, email, avatar_s3_key,
+                   country, language, age, gender, dietary, interests
+            FROM users WHERE id = %s
+            """,
             (user_uuid,),
         )
         user = db.fetchone()
@@ -586,12 +597,87 @@ def _get_user_profile(event, current_user):
         "followingCount": following_count,
         "isFollowing": is_following,
         "isMe": user["id"] == current_user["id"],
+        "aboutMe": {
+            "country": user["country"],
+            "language": user["language"],
+            "age": user["age"],
+            "gender": user["gender"],
+            "dietary": user["dietary"] or [],
+            "interests": user["interests"] or [],
+        },
     })
 
 
 def _get_user_posts(event, current_user):
     user_uuid = parse_uuid((event.get("pathParameters") or {}).get("user_id", ""), "user_id")
     return _list_posts(current_user, author_id=user_uuid)
+
+
+def _serialize_people_rows(rows):
+    return [
+        {
+            **_serialize_user(row["id"], row["full_name"], row["email"], row["avatar_s3_key"]),
+            "isFollowing": row["is_following"],
+            "followersCount": row["followers_count"],
+        }
+        for row in rows
+    ]
+
+
+def _get_followers(event, current_user):
+    """Everyone who follows this user, for their 'Followers' list."""
+    user_uuid = parse_uuid((event.get("pathParameters") or {}).get("user_id", ""), "user_id")
+    with get_db() as db:
+        db.execute("SELECT id FROM users WHERE id = %s", (user_uuid,))
+        if not db.fetchone():
+            raise AppError("User not found", status=404)
+
+        db.execute(
+            """
+            SELECT u.id, u.full_name, u.email, u.avatar_s3_key,
+                   EXISTS(
+                       SELECT 1 FROM follows
+                       WHERE follower_id = %s AND followed_id = u.id
+                   ) AS is_following,
+                   (SELECT COUNT(*) FROM follows WHERE followed_id = u.id) AS followers_count
+            FROM follows f
+            JOIN users u ON u.id = f.follower_id
+            WHERE f.followed_id = %s
+            ORDER BY f.created_at DESC
+            """,
+            (current_user["id"], user_uuid),
+        )
+        rows = db.fetchall()
+
+    return success(_serialize_people_rows(rows))
+
+
+def _get_following(event, current_user):
+    """Everyone this user follows, for their 'Following' list."""
+    user_uuid = parse_uuid((event.get("pathParameters") or {}).get("user_id", ""), "user_id")
+    with get_db() as db:
+        db.execute("SELECT id FROM users WHERE id = %s", (user_uuid,))
+        if not db.fetchone():
+            raise AppError("User not found", status=404)
+
+        db.execute(
+            """
+            SELECT u.id, u.full_name, u.email, u.avatar_s3_key,
+                   EXISTS(
+                       SELECT 1 FROM follows
+                       WHERE follower_id = %s AND followed_id = u.id
+                   ) AS is_following,
+                   (SELECT COUNT(*) FROM follows WHERE followed_id = u.id) AS followers_count
+            FROM follows f
+            JOIN users u ON u.id = f.followed_id
+            WHERE f.follower_id = %s
+            ORDER BY f.created_at DESC
+            """,
+            (current_user["id"], user_uuid),
+        )
+        rows = db.fetchall()
+
+    return success(_serialize_people_rows(rows))
 
 
 def _follow_user(event, current_user):

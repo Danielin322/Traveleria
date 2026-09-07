@@ -84,12 +84,16 @@ export async function createDocument(doc: NewDocument): Promise<void> {
 
   const { id, uploadUrl, contentType } = await createResponse.json();
 
-  // Read the picked file, then PUT the bytes straight to S3. The Content-Type
-  // must match what the URL was signed for or S3 rejects the request.
+  // Read the picked file, then PUT the bytes straight to S3. Content-Type and
+  // the encryption header must match what the URL was signed for, or S3
+  // rejects the request — the bucket's policy requires SSE on every upload.
   const fileBody = await fetch(doc.uri).then((r) => r.blob());
   const uploadResponse = await fetch(uploadUrl, {
     method: "PUT",
-    headers: { "Content-Type": contentType },
+    headers: {
+      "Content-Type": contentType,
+      "x-amz-server-side-encryption": "AES256",
+    },
     body: fileBody,
   });
 
@@ -158,7 +162,10 @@ export async function uploadAvatar(uri: string, mimeType: string): Promise<void>
   const fileBody = await fetch(uri).then((r) => r.blob());
   const uploadResponse = await fetch(uploadUrl, {
     method: "PUT",
-    headers: { "Content-Type": mimeType },
+    headers: {
+      "Content-Type": mimeType,
+      "x-amz-server-side-encryption": "AES256",
+    },
     body: fileBody,
   });
 

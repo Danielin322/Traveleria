@@ -146,6 +146,8 @@ if aws lambda get-function --function-name traveleria-social --region "$REGION" 
     SOCIAL_USER_ID=$(ensure_resource "/social/users" "{user_id}")
     FOLLOW_ID=$(ensure_resource "/social/users/{user_id}" "follow")
     USER_POSTS_ID=$(ensure_resource "/social/users/{user_id}" "posts")
+    FOLLOWERS_ID=$(ensure_resource "/social/users/{user_id}" "followers")
+    FOLLOWING_ID=$(ensure_resource "/social/users/{user_id}" "following")
     SHARED_TRIPS_ID=$(ensure_resource "/social" "shared-trips")
     SHARED_TRIP_ID=$(ensure_resource "/social/shared-trips" "{trip_id}")
     SHARED_TRIP_COPY_ID=$(ensure_resource "/social/shared-trips/{trip_id}" "copy")
@@ -162,6 +164,8 @@ if aws lambda get-function --function-name traveleria-social --region "$REGION" 
     ensure_method "$FOLLOW_ID"        "POST"   "traveleria-social" "/social/users/{user_id}/follow"
     ensure_method "$FOLLOW_ID"        "DELETE" "traveleria-social" "/social/users/{user_id}/follow"
     ensure_method "$USER_POSTS_ID"    "GET"    "traveleria-social" "/social/users/{user_id}/posts"
+    ensure_method "$FOLLOWERS_ID"     "GET"    "traveleria-social" "/social/users/{user_id}/followers"
+    ensure_method "$FOLLOWING_ID"     "GET"    "traveleria-social" "/social/users/{user_id}/following"
     ensure_method "$SHARED_TRIP_ID"      "GET"  "traveleria-social" "/social/shared-trips/{trip_id}"
     ensure_method "$SHARED_TRIP_COPY_ID" "POST" "traveleria-social" "/social/shared-trips/{trip_id}/copy"
 else

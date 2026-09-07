@@ -6,12 +6,18 @@ import {
   Alert,
   FlatList,
   Image,
+  Modal,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
 
+import {
+  dietaryLabels,
+  genderLabel,
+  interestLabels,
+} from "../constants/profileOptions";
 import {
   Elevation,
   FontFamily,
@@ -24,23 +30,21 @@ import { useThemeColors } from "../contexts/ThemeContext";
 import {
   Post,
   PublicProfile,
+  SocialUser,
+  addComment,
+  deleteComment as deleteCommentApi,
   followUser,
   getUserPosts,
   getUserProfile,
+  likePost,
   unfollowUser,
+  unlikePost,
 } from "../services/socialService";
-
-function timeAgo(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const m = Math.floor(diff / 60000);
-  if (m < 1) return "just now";
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
-  const d = Math.floor(h / 24);
-  if (d < 7) return `${d}d`;
-  return new Date(iso).toLocaleDateString();
-}
+import { apiFetch } from "../services/apiClient";
+import { Avatar } from "../components/social/Avatar";
+import { CommentsSheet } from "../components/social/CommentsSheet";
+import { LikesModal } from "../components/social/LikesModal";
+import { PostCard } from "../components/social/PostCard";
 
 export default function UserProfileScreen() {
   const router = useRouter();
@@ -52,20 +56,35 @@ export default function UserProfileScreen() {
 
   const [profile, setProfile] = useState<PublicProfile | null>(null);
   const [posts, setPosts] = useState<Post[]>([]);
+  const [myId, setMyId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [followBusy, setFollowBusy] = useState(false);
+
+  const [likesModalUsers, setLikesModalUsers] = useState<SocialUser[] | null>(null);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [commentsPostId, setCommentsPostId] = useState<string | null>(null);
+
+  const activePost = useMemo(
+    () => posts.find((p) => p.id === commentsPostId) ?? null,
+    [posts, commentsPostId]
+  );
 
   const load = useCallback(async () => {
     if (!userId) return;
     try {
       setError(null);
-      const [profileData, postsData] = await Promise.all([
+      const [profileData, postsData, meResponse] = await Promise.all([
         getUserProfile(userId),
         getUserPosts(userId),
+        apiFetch("/users/me"),
       ]);
       setProfile(profileData);
       setPosts(postsData);
+      if (meResponse.ok) {
+        const me = await meResponse.json();
+        setMyId(me.id ?? null);
+      }
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Could not load this profile."
@@ -80,6 +99,15 @@ export default function UserProfileScreen() {
       load();
     }, [load])
   );
+
+  const refreshPosts = useCallback(async () => {
+    setPosts(await getUserPosts(userId));
+  }, [userId]);
+
+  const goToProfile = (id: string) => {
+    if (id === userId) return;
+    router.push({ pathname: "/user-profile", params: { id } });
+  };
 
   const toggleFollow = async () => {
     if (!profile || followBusy) return;
@@ -98,6 +126,49 @@ export default function UserProfileScreen() {
       );
     } finally {
       setFollowBusy(false);
+    }
+  };
+
+  const toggleLike = async (post: Post) => {
+    if (!myId) return;
+    const alreadyLiked = post.likes.some((u) => u.id === myId);
+    try {
+      if (alreadyLiked) {
+        await unlikePost(post.id);
+      } else {
+        await likePost(post.id);
+      }
+      await refreshPosts();
+    } catch (err) {
+      Alert.alert(
+        "Could not update like",
+        err instanceof Error ? err.message : "Please try again."
+      );
+    }
+  };
+
+  const submitComment = async (text: string, parentCommentId?: string) => {
+    if (!commentsPostId) return;
+    try {
+      await addComment(commentsPostId, text, parentCommentId);
+      await refreshPosts();
+    } catch (err) {
+      Alert.alert(
+        "Could not post comment",
+        err instanceof Error ? err.message : "Please try again."
+      );
+    }
+  };
+
+  const removeComment = async (commentId: string) => {
+    try {
+      await deleteCommentApi(commentId);
+      await refreshPosts();
+    } catch (err) {
+      Alert.alert(
+        "Could not delete",
+        err instanceof Error ? err.message : "Please try again."
+      );
     }
   };
 
@@ -127,6 +198,16 @@ export default function UserProfileScreen() {
     );
   }
 
+  const aboutMe = profile?.aboutMe;
+  const hasAboutMe =
+    !!aboutMe &&
+    (aboutMe.country ||
+      aboutMe.language ||
+      aboutMe.age ||
+      aboutMe.gender ||
+      aboutMe.dietary.length > 0 ||
+      aboutMe.interests.length > 0);
+
   return (
     <View style={styles.container}>
       {header}
@@ -143,17 +224,11 @@ export default function UserProfileScreen() {
       <FlatList
         data={posts}
         keyExtractor={(p) => p.id}
-        contentContainerStyle={{ paddingBottom: 30 }}
+        contentContainerStyle={{ paddingHorizontal: Spacing.xl, paddingBottom: 30 }}
         ListHeaderComponent={
           profile ? (
             <View style={styles.profileHeader}>
-              {profile.avatar ? (
-                <Image source={{ uri: profile.avatar }} style={styles.avatar} />
-              ) : (
-                <View style={[styles.avatar, styles.avatarPlaceholder]}>
-                  <Ionicons name="person" size={40} color={colors.textMuted} />
-                </View>
-              )}
+              <Avatar uri={profile.avatar} size={88} iconSize={40} style={styles.avatarMargin} />
               <Text style={styles.name}>{profile.name}</Text>
 
               <View style={styles.statsRow}>
@@ -161,14 +236,30 @@ export default function UserProfileScreen() {
                   <Text style={styles.statNumber}>{profile.postsCount}</Text>
                   <Text style={styles.statLabel}>Posts</Text>
                 </View>
-                <View style={styles.statItem}>
+                <TouchableOpacity
+                  style={styles.statItem}
+                  onPress={() =>
+                    router.push({
+                      pathname: "/people-list",
+                      params: { userId: profile.id, type: "followers" },
+                    })
+                  }
+                >
                   <Text style={styles.statNumber}>{profile.followersCount}</Text>
                   <Text style={styles.statLabel}>Followers</Text>
-                </View>
-                <View style={styles.statItem}>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.statItem}
+                  onPress={() =>
+                    router.push({
+                      pathname: "/people-list",
+                      params: { userId: profile.id, type: "following" },
+                    })
+                  }
+                >
                   <Text style={styles.statNumber}>{profile.followingCount}</Text>
                   <Text style={styles.statLabel}>Following</Text>
-                </View>
+                </TouchableOpacity>
               </View>
 
               {!profile.isMe && (
@@ -200,35 +291,119 @@ export default function UserProfileScreen() {
                 </TouchableOpacity>
               )}
 
+              {hasAboutMe && (
+                <View style={styles.aboutSection}>
+                  <Text style={styles.aboutHeading}>About Me</Text>
+                  {aboutMe!.country && (
+                    <View style={styles.aboutRow}>
+                      <Ionicons name="flag-outline" size={18} color={colors.primary} />
+                      <Text style={styles.aboutText}>{aboutMe!.country}</Text>
+                    </View>
+                  )}
+                  {aboutMe!.language && (
+                    <View style={styles.aboutRow}>
+                      <Ionicons name="language-outline" size={18} color={colors.primary} />
+                      <Text style={styles.aboutText}>{aboutMe!.language}</Text>
+                    </View>
+                  )}
+                  {aboutMe!.age && (
+                    <View style={styles.aboutRow}>
+                      <Ionicons name="calendar-outline" size={18} color={colors.primary} />
+                      <Text style={styles.aboutText}>{aboutMe!.age} years old</Text>
+                    </View>
+                  )}
+                  {aboutMe!.gender && (
+                    <View style={styles.aboutRow}>
+                      <Ionicons name="person-outline" size={18} color={colors.primary} />
+                      <Text style={styles.aboutText}>{genderLabel(aboutMe!.gender)}</Text>
+                    </View>
+                  )}
+                  {aboutMe!.dietary.length > 0 && (
+                    <View style={styles.aboutTagsGrid}>
+                      {dietaryLabels(aboutMe!.dietary).map((label, i) => (
+                        <View key={i} style={styles.aboutTag}>
+                          <Text style={styles.aboutTagText}>{label}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                  {aboutMe!.interests.length > 0 && (
+                    <View style={styles.aboutTagsGrid}>
+                      {interestLabels(aboutMe!.interests).map((label, i) => (
+                        <View key={i} style={styles.aboutTag}>
+                          <Text style={styles.aboutTagText}>{label}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              )}
+
               <Text style={styles.postsHeading}>Posts</Text>
             </View>
           ) : null
         }
         renderItem={({ item }) => (
-          <View style={styles.postCard}>
-            <Text style={styles.postTime}>{timeAgo(item.createdAt)}</Text>
-            {item.text ? <Text style={styles.postText}>{item.text}</Text> : null}
-            {item.imageUri ? (
-              <Image source={{ uri: item.imageUri }} style={styles.postImage} />
-            ) : null}
-            <View style={styles.postMetaRow}>
-              <Ionicons name="heart-outline" size={16} color={colors.textMuted} />
-              <Text style={styles.postMetaText}>{item.likes.length}</Text>
-              <Ionicons
-                name="chatbubble-outline"
-                size={16}
-                color={colors.textMuted}
-                style={{ marginLeft: 14 }}
-              />
-              <Text style={styles.postMetaText}>
-                {item.comments.length +
-                  item.comments.reduce((sum, c) => sum + c.replies.length, 0)}
-              </Text>
-            </View>
-          </View>
+          <PostCard
+            post={item}
+            myId={myId}
+            onPressUser={goToProfile}
+            onToggleLike={toggleLike}
+            onOpenComments={setCommentsPostId}
+            onPressImage={setPreviewImage}
+            onPressSharedTrip={(tripId) =>
+              router.push({ pathname: "/shared-trip-view", params: { id: tripId } })
+            }
+            onPressLikes={setLikesModalUsers}
+          />
         )}
         ListEmptyComponent={<Text style={styles.emptyText}>No posts yet.</Text>}
       />
+
+      <LikesModal
+        users={likesModalUsers}
+        onClose={() => setLikesModalUsers(null)}
+        onPressUser={(id) => {
+          setLikesModalUsers(null);
+          goToProfile(id);
+        }}
+      />
+
+      <CommentsSheet
+        post={activePost}
+        myId={myId}
+        onClose={() => setCommentsPostId(null)}
+        onPressUser={goToProfile}
+        onSubmitComment={submitComment}
+        onDeleteComment={removeComment}
+      />
+
+      <Modal
+        visible={!!previewImage}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPreviewImage(null)}
+      >
+        <TouchableOpacity
+          style={styles.previewOverlay}
+          activeOpacity={1}
+          onPress={() => setPreviewImage(null)}
+        >
+          <TouchableOpacity
+            style={styles.previewClose}
+            onPress={() => setPreviewImage(null)}
+          >
+            <Ionicons name="close" size={28} color="#fff" />
+          </TouchableOpacity>
+          {previewImage && (
+            <Image
+              source={{ uri: previewImage }}
+              style={styles.previewImage}
+              resizeMode="contain"
+            />
+          )}
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -277,15 +452,9 @@ const makeStyles = (colors: ThemeColors) =>
     },
     profileHeader: {
       alignItems: "center",
-      paddingHorizontal: Spacing.xl,
       paddingBottom: Spacing.lg,
     },
-    avatar: { width: 88, height: 88, borderRadius: 44, marginBottom: Spacing.md },
-    avatarPlaceholder: {
-      backgroundColor: colors.surfaceSunken,
-      alignItems: "center",
-      justifyContent: "center",
-    },
+    avatarMargin: { marginBottom: Spacing.md },
     name: {
       fontSize: FontSize.h2,
       fontFamily: FontFamily.bold,
@@ -320,6 +489,48 @@ const makeStyles = (colors: ThemeColors) =>
       fontSize: FontSize.body,
     },
     followingBtnText: { color: colors.textPrimary },
+    aboutSection: {
+      width: "100%",
+      backgroundColor: colors.surface,
+      borderRadius: Radius.lg,
+      padding: Spacing.lg,
+      marginBottom: Spacing.xl,
+      ...Elevation.sm,
+    },
+    aboutHeading: {
+      fontSize: FontSize.small,
+      fontFamily: FontFamily.semibold,
+      color: colors.textMuted,
+      marginBottom: Spacing.md,
+    },
+    aboutRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      marginBottom: Spacing.sm,
+    },
+    aboutText: {
+      marginLeft: Spacing.md,
+      fontSize: FontSize.body,
+      fontFamily: FontFamily.medium,
+      color: colors.textPrimary,
+    },
+    aboutTagsGrid: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: Spacing.sm,
+      marginTop: Spacing.sm,
+    },
+    aboutTag: {
+      backgroundColor: colors.primarySoft,
+      paddingHorizontal: Spacing.lg,
+      paddingVertical: Spacing.sm,
+      borderRadius: Radius.pill,
+    },
+    aboutTagText: {
+      color: colors.primary,
+      fontFamily: FontFamily.semibold,
+      fontSize: FontSize.small,
+    },
     postsHeading: {
       alignSelf: "flex-start",
       fontSize: FontSize.small,
@@ -328,41 +539,29 @@ const makeStyles = (colors: ThemeColors) =>
       marginTop: Spacing.md,
       marginBottom: Spacing.sm,
     },
-    postCard: {
-      backgroundColor: colors.surface,
-      borderRadius: Radius.lg,
-      padding: Spacing.lg,
-      marginHorizontal: Spacing.xl,
-      marginBottom: Spacing.md,
-      ...Elevation.sm,
-    },
-    postTime: {
-      fontSize: FontSize.tiny,
-      color: colors.textMuted,
-      marginBottom: Spacing.xs,
-    },
-    postText: {
-      fontSize: FontSize.small,
-      color: colors.textPrimary,
-      marginBottom: Spacing.sm,
-    },
-    postImage: {
-      width: "100%",
-      height: 200,
-      borderRadius: Radius.md,
-      backgroundColor: colors.border,
-      marginBottom: Spacing.sm,
-    },
-    postMetaRow: { flexDirection: "row", alignItems: "center" },
-    postMetaText: {
-      fontSize: FontSize.caption,
-      color: colors.textMuted,
-      marginLeft: 4,
-    },
     emptyText: {
       textAlign: "center",
       color: colors.textMuted,
       marginTop: Spacing.xxl,
       fontSize: FontSize.small,
+    },
+    previewOverlay: {
+      flex: 1,
+      backgroundColor: "rgba(0,0,0,0.95)",
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    previewImage: { width: "100%", height: "100%" },
+    previewClose: {
+      position: "absolute",
+      top: 50,
+      right: 20,
+      backgroundColor: "rgba(0,0,0,0.5)",
+      width: 42,
+      height: 42,
+      borderRadius: 21,
+      alignItems: "center",
+      justifyContent: "center",
+      zIndex: 10,
     },
   });
